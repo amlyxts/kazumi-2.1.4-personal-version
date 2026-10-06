@@ -22,7 +22,10 @@ jobs:
         run: flutter pub get
 
       - name: Build iOS (no codesign)
-        run: flutter build ios --release --no-codesign
+        run: >
+          flutter build ios --release --no-codesign
+          --dart-define=DANDANAPI_APPID=${{ secrets.DANDANAPI_APPID }}
+          --dart-define=DANDANAPI_KEY=${{ secrets.DANDANAPI_KEY }}
 
       - name: Pack unsigned ipa
         run: |

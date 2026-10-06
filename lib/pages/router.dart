@@ -4,6 +4,7 @@ import 'package:kazumi/pages/my/my_module.dart';
 import 'package:kazumi/pages/video/local_video_module.dart';
 import 'package:kazumi/pages/timeline/timeline_module.dart';
 import 'package:kazumi/pages/collect/collect_module.dart';
+import 'package:kazumi/utils/constants.dart';
 
 class MenuRouteItem {
   final String path;
@@ -48,10 +49,12 @@ final MenuRoute menu = MenuRoute([
     path: "/collect",
     module: CollectModule(),
   ),
-  MenuRouteItem(
-    path: "/local_video",
-    module: LocalVideoModule(),
-  ),
+  // [my修改] 移动端不挂本地视频页签, 页签索引随列表自动对齐
+  if (kSupportsLocalVideo)
+    MenuRouteItem(
+      path: "/local_video",
+      module: LocalVideoModule(),
+    ),
   MenuRouteItem(
     path: "/my",
     module: MyModule(),

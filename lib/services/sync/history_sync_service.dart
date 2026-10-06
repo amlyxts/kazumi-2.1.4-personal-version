@@ -4,6 +4,7 @@ import 'package:kazumi/modules/history/history_module.dart';
 import 'package:kazumi/modules/history/history_sync.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:path_provider/path_provider.dart';
 
 class HistorySyncService {
@@ -184,6 +185,11 @@ class HistorySyncService {
   Future<void> applySnapshotToLocal(HistorySyncSnapshot snapshot) async {
     await GStorage.histories.clear();
     for (final history in snapshot.histories) {
+      // [my修改] 移动端无本地视频功能: 不接收本地视频历史条目,
+      // clear() + 跳过写入同时清掉旧版同步残留的存量条目
+      if (!kSupportsLocalVideo && history.adapterName == localVideoPluginName) {
+        continue;
+      }
       await GStorage.histories.put(history.key, history);
     }
     await GStorage.histories.flush();

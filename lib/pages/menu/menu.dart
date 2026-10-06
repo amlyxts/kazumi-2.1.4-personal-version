@@ -3,6 +3,7 @@ import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
 import 'package:kazumi/pages/router.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:provider/provider.dart';
 
 class ScaffoldMenu extends StatefulWidget {
@@ -34,9 +35,10 @@ class NavigationBarState extends ChangeNotifier {
       case "/tab/collect/":
         return 2;
       case "/tab/local_video/":
-        return 3;
+        // [my修改] 移动端无本地视频页签, 默认页回落到推荐
+        return kSupportsLocalVideo ? 3 : 0;
       case "/tab/my/":
-        return 4;
+        return kSupportsLocalVideo ? 4 : 3;
       default:
         return 0;
     }
@@ -96,7 +98,7 @@ class _ScaffoldMenu extends State<ScaffoldMenu> {
         bottomNavigationBar: state.isHide
             ? const SizedBox(height: 0)
             : NavigationBar(
-                destinations: const <Widget>[
+                destinations: <Widget>[
                   NavigationDestination(
                     selectedIcon: Icon(Icons.home),
                     icon: Icon(Icons.home_outlined),
@@ -113,11 +115,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> {
                     label: '追番',
                   ),
                   // [本地播放] 动作入口, 不对应页面
-                  NavigationDestination(
-                    selectedIcon: Icon(Icons.video_library),
-                    icon: Icon(Icons.video_library_outlined),
-                    label: '本地视频',
-                  ),
+                  // [my修改] 移动端不提供本地视频入口
+                  if (kSupportsLocalVideo)
+                    NavigationDestination(
+                      selectedIcon: Icon(Icons.video_library),
+                      icon: Icon(Icons.video_library_outlined),
+                      label: '本地视频',
+                    ),
                   NavigationDestination(
                     selectedIcon: Icon(Icons.settings),
                     icon: Icon(Icons.settings),
@@ -152,7 +156,7 @@ class _ScaffoldMenu extends State<ScaffoldMenu> {
                   child: const Icon(Icons.search),
                 ),
                 labelType: NavigationRailLabelType.selected,
-                destinations: const <NavigationRailDestination>[
+                destinations: <NavigationRailDestination>[
                   NavigationRailDestination(
                     selectedIcon: Icon(Icons.home),
                     icon: Icon(Icons.home_outlined),
@@ -169,11 +173,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> {
                     label: Text('追番'),
                   ),
                   // [本地播放] 动作入口, 不对应页面
-                  NavigationRailDestination(
-                    selectedIcon: Icon(Icons.video_library),
-                    icon: Icon(Icons.video_library_outlined),
-                    label: Text('本地视频'),
-                  ),
+                  // [my修改] 移动端不提供本地视频入口
+                  if (kSupportsLocalVideo)
+                    NavigationRailDestination(
+                      selectedIcon: Icon(Icons.video_library),
+                      icon: Icon(Icons.video_library_outlined),
+                      label: Text('本地视频'),
+                    ),
                   NavigationRailDestination(
                     selectedIcon: Icon(Icons.settings),
                     icon: Icon(Icons.settings_outlined),

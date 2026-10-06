@@ -1,6 +1,11 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:kazumi/request/config/api_endpoints.dart';
+
+/// [my修改] 本地视频体系仅桌面端可用, iOS/Android 移动端不提供该功能
+final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
 
 class StyleString {
   static const double cardSpace = 8;

@@ -1,9 +1,11 @@
 import 'package:hive_ce/hive.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/history/history_module.dart';
 import 'package:kazumi/services/sync/history_sync_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
+import 'package:kazumi/services/storage/history_storage_coordinator.dart';
 
 typedef HistoryProgressSyncAppender = Future<void> Function({
   required History history,
@@ -21,6 +23,11 @@ typedef HistoryClearSyncAppender = Future<void> Function();
 ///
 /// 提供观看历史相关的数据访问抽象
 abstract class IHistoryRepository {
+  /// 历史记录变更事件流
+  ///
+  /// 写入、删除、清空各推送一次。所有历史写入都经过本仓库。
+  Stream<void> get changes;
+
   /// 获取所有历史记录（按时间倒序）
   List<History> getAllHistories();
 
@@ -39,9 +46,12 @@ abstract class IHistoryRepository {
   ///
   /// [identity] 播放历史身份
   /// [progress] 观看进度
+  /// [duration] 视频总时长；距结尾 [nearEndWatchedThreshold] 以内的进度视为
+  /// 已看完，归零保存。传 [Duration.zero] 表示时长未知，不做该判断
   Future<void> updateHistory({
     required PlaybackHistoryIdentity identity,
     required Duration progress,
+    Duration duration = Duration.zero,
   });
 
   /// 获取上次观看的进度
@@ -73,18 +83,6 @@ abstract class IHistoryRepository {
   /// [history] 要删除的历史记录
   Future<void> deleteHistory(History history);
 
-  /// 清空特定集数的观看进度
-  ///
-  /// [bangumiItem] 番剧信息
-  /// [adapterName] 适配器名称
-  /// [episode] 集数
-  Future<void> clearProgress(
-    BangumiItem bangumiItem,
-    String adapterName,
-    int episode, {
-    String entryKind = HistoryEntryKind.online,
-  });
-
   /// 清空所有历史记录
   Future<void> clearAllHistories();
 
@@ -114,6 +112,8 @@ class HistoryRepository implements IHistoryRepository {
   final HistoryProgressSyncAppender _progressSyncAppender;
   final HistoryDeleteSyncAppender _deleteSyncAppender;
   final HistoryClearSyncAppender _clearSyncAppender;
+  final HistoryStorageCoordinator _storageCoordinator =
+      HistoryStorageCoordinator();
 
   static Future<void> _appendProgressSync({
     required History history,
@@ -147,6 +147,9 @@ class HistoryRepository implements IHistoryRepository {
       () => historySyncService.appendClearAll(),
     );
   }
+
+  @override
+  Stream<void> get changes => _historiesBox.watch();
 
   @override
   List<History> getAllHistories() {
@@ -199,92 +202,100 @@ class HistoryRepository implements IHistoryRepository {
   Future<void> updateHistory({
     required PlaybackHistoryIdentity identity,
     required Duration progress,
+    Duration duration = Duration.zero,
   }) async {
-    try {
-      if (!identity.canRecord) {
-        return;
-      }
-      // 检查隐私模式
-      if (getPrivateMode()) {
-        return;
-      }
-
-      final episode = identity.episodeNumber;
-      final adapterName = identity.pluginName;
-      final bangumiItem = identity.bangumiItem;
-
-      final now = DateTime.now();
-      final nowMs = now.millisecondsSinceEpoch;
-      final legacyKey = History.legacyKey(adapterName, bangumiItem);
-      final shouldMigrateLegacy =
-          HistoryEntryKind.normalize(identity.entryKind) ==
-              HistoryEntryKind.online;
-
-      // 获取或创建历史记录
-      var history = _findHistory(
-            adapterName,
-            bangumiItem,
-            identity.entryKind,
-          ) ??
-          History(
-            bangumiItem,
-            episode,
-            adapterName,
-            now,
-            identity.onlineBangumiSrc,
-            identity.episodeTitle,
-            entryKind: identity.entryKind,
-            episodePageUrl: identity.episodePageUrl,
-          );
-
-      // 更新历史记录
-      history.lastWatchEpisode = episode;
-      history.lastWatchTime = now;
-      history.entryKind = HistoryEntryKind.normalize(identity.entryKind);
-      if (identity.onlineBangumiSrc.isNotEmpty) {
-        history.lastSrc = identity.onlineBangumiSrc;
-      }
-      if (identity.episodeTitle.isNotEmpty) {
-        history.lastWatchEpisodeName = identity.episodeTitle;
-      }
-      if (identity.episodePageUrl.isNotEmpty) {
-        history.episodePageUrl = identity.episodePageUrl;
-      }
-
-      // 更新观看进度
-      var prog = history.progresses[episode];
-      if (prog == null) {
-        history.progresses[episode] = Progress(
-          episode,
-          identity.road,
-          progress.inMilliseconds,
-          updatedAtMs: nowMs,
-        );
-      } else {
-        prog.road = identity.road;
-        prog.progress = progress;
-        prog.updatedAtMs = nowMs;
-      }
-
-      // 保存到存储
-      await _historiesBox.put(history.key, history);
-      if (shouldMigrateLegacy && legacyKey != history.key) {
-        await _historiesBox.delete(legacyKey);
-      }
-      await _progressSyncAppender(
-        history: history,
-        episode: episode,
-        road: identity.road,
-        progressMs: progress.inMilliseconds,
-        updatedAt: nowMs,
-      );
-    } catch (e, stackTrace) {
-      KazumiLogger().e(
-        'GStorage: update history failed. bangumi=${identity.bangumiItem.name}, episode=${identity.episodeNumber}',
-        error: e,
-        stackTrace: stackTrace,
-      );
+    // 距结尾过近视为已看完，归零保存
+    if (duration > Duration.zero &&
+        progress >= duration - nearEndWatchedThreshold) {
+      progress = Duration.zero;
     }
+    await _storageCoordinator.run(() async {
+      try {
+        if (!identity.canRecord) {
+          return;
+        }
+        // 检查隐私模式
+        if (getPrivateMode()) {
+          return;
+        }
+
+        final episode = identity.episodeNumber;
+        final adapterName = identity.pluginName;
+        final bangumiItem = identity.bangumiItem;
+
+        final now = DateTime.now();
+        final nowMs = now.millisecondsSinceEpoch;
+        final legacyKey = History.legacyKey(adapterName, bangumiItem);
+        final shouldMigrateLegacy =
+            HistoryEntryKind.normalize(identity.entryKind) ==
+                HistoryEntryKind.online;
+
+        // 获取或创建历史记录
+        var history = _findHistory(
+              adapterName,
+              bangumiItem,
+              identity.entryKind,
+            ) ??
+            History(
+              bangumiItem,
+              episode,
+              adapterName,
+              now,
+              identity.onlineBangumiSrc,
+              identity.episodeTitle,
+              entryKind: identity.entryKind,
+              episodePageUrl: identity.episodePageUrl,
+            );
+
+        // 更新历史记录
+        history.lastWatchEpisode = episode;
+        history.lastWatchTime = now;
+        history.entryKind = HistoryEntryKind.normalize(identity.entryKind);
+        if (identity.onlineBangumiSrc.isNotEmpty) {
+          history.lastSrc = identity.onlineBangumiSrc;
+        }
+        if (identity.episodeTitle.isNotEmpty) {
+          history.lastWatchEpisodeName = identity.episodeTitle;
+        }
+        if (identity.episodePageUrl.isNotEmpty) {
+          history.episodePageUrl = identity.episodePageUrl;
+        }
+
+        // 更新观看进度
+        var prog = history.progresses[episode];
+        if (prog == null) {
+          history.progresses[episode] = Progress(
+            episode,
+            identity.road,
+            progress.inMilliseconds,
+            updatedAtMs: nowMs,
+          );
+        } else {
+          prog.road = identity.road;
+          prog.progress = progress;
+          prog.updatedAtMs = nowMs;
+        }
+
+        // 保存到存储
+        await _historiesBox.put(history.key, history);
+        if (shouldMigrateLegacy && legacyKey != history.key) {
+          await _historiesBox.delete(legacyKey);
+        }
+        await _progressSyncAppender(
+          history: history,
+          episode: episode,
+          road: identity.road,
+          progressMs: progress.inMilliseconds,
+          updatedAt: nowMs,
+        );
+      } catch (e, stackTrace) {
+        KazumiLogger().e(
+          'GStorage: update history failed. bangumi=${identity.bangumiItem.name}, episode=${identity.episodeNumber}',
+          error: e,
+          stackTrace: stackTrace,
+        );
+      }
+    });
   }
 
   @override
@@ -328,67 +339,40 @@ class HistoryRepository implements IHistoryRepository {
 
   @override
   Future<void> deleteHistory(History history) async {
-    try {
-      await _historiesBox.delete(history.key);
-      if (HistoryEntryKind.normalize(history.entryKind) ==
-          HistoryEntryKind.online) {
-        await _historiesBox.delete(
-          History.legacyKey(history.adapterName, history.bangumiItem),
+    await _storageCoordinator.run(() async {
+      try {
+        await _historiesBox.delete(history.key);
+        if (HistoryEntryKind.normalize(history.entryKind) ==
+            HistoryEntryKind.online) {
+          await _historiesBox.delete(
+            History.legacyKey(history.adapterName, history.bangumiItem),
+          );
+        }
+        await _deleteSyncAppender(history);
+      } catch (e, stackTrace) {
+        KazumiLogger().e(
+          'GStorage: delete history failed. bangumi=${history.bangumiItem.name}',
+          error: e,
+          stackTrace: stackTrace,
         );
       }
-      await _deleteSyncAppender(history);
-    } catch (e, stackTrace) {
-      KazumiLogger().e(
-        'GStorage: delete history failed. bangumi=${history.bangumiItem.name}',
-        error: e,
-        stackTrace: stackTrace,
-      );
-    }
-  }
-
-  @override
-  Future<void> clearProgress(
-    BangumiItem bangumiItem,
-    String adapterName,
-    int episode, {
-    String entryKind = HistoryEntryKind.online,
-  }) async {
-    try {
-      var history = _findHistory(adapterName, bangumiItem, entryKind);
-      if (history != null && history.progresses[episode] != null) {
-        final nowMs = DateTime.now().millisecondsSinceEpoch;
-        history.progresses[episode]!.progress = Duration.zero;
-        history.progresses[episode]!.updatedAtMs = nowMs;
-        await _historiesBox.put(history.key, history);
-        await _progressSyncAppender(
-          history: history,
-          episode: episode,
-          road: history.progresses[episode]!.road,
-          progressMs: 0,
-          updatedAt: nowMs,
-        );
-      }
-    } catch (e, stackTrace) {
-      KazumiLogger().e(
-        'GStorage: clear progress failed. bangumi=${bangumiItem.name}, episode=$episode',
-        error: e,
-        stackTrace: stackTrace,
-      );
-    }
+    });
   }
 
   @override
   Future<void> clearAllHistories() async {
-    try {
-      await _historiesBox.clear();
-      await _clearSyncAppender();
-    } catch (e, stackTrace) {
-      KazumiLogger().e(
-        'GStorage: clear all histories failed',
-        error: e,
-        stackTrace: stackTrace,
-      );
-    }
+    await _storageCoordinator.run(() async {
+      try {
+        await _historiesBox.clear();
+        await _clearSyncAppender();
+      } catch (e, stackTrace) {
+        KazumiLogger().e(
+          'GStorage: clear all histories failed',
+          error: e,
+          stackTrace: stackTrace,
+        );
+      }
+    });
   }
 
   @override

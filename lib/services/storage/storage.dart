@@ -11,6 +11,8 @@ import 'package:kazumi/modules/collect/collect_change_module.dart';
 import 'package:kazumi/modules/collect/collect_sync_merger.dart';
 import 'package:kazumi/modules/search/search_history_module.dart';
 import 'package:kazumi/modules/download/download_module.dart';
+import 'package:kazumi/services/storage/history_storage_coordinator.dart';
+import 'package:kazumi/services/download/download_path_migration.dart';
 
 import 'package:kazumi/services/storage/settings_keys.dart';
 export 'package:kazumi/services/storage/settings_keys.dart';
@@ -157,6 +159,9 @@ class GStorage {
     shieldList = await _openBoxSafe<String>('shieldList');
     searchHistory = await _openBoxSafe<SearchHistory>('searchHistory');
     downloads = await _openBoxSafe<DownloadRecord>('downloads');
+    if (Platform.isIOS) {
+      await rebaseIosDownloadPaths(downloads);
+    }
   }
 
   /// Open a Hive box with automatic recovery on corruption.
@@ -213,9 +218,9 @@ class GStorage {
     final hiveBoxFile = File('${appDocumentDir.path}/hive/$boxName.hive');
     if (await hiveBoxFile.exists()) {
       await hiveBoxFile.copy(backupFilePath);
-      print('Backup success: $backupFilePath');
+      KazumiLogger().i('GStorage: backup success: $backupFilePath');
     } else {
-      print('Hive box not exists');
+      KazumiLogger().w('GStorage: Hive box does not exist: $boxName');
     }
   }
 
@@ -223,25 +228,24 @@ class GStorage {
     final backupFile = File(backupFilePath);
     final backupContent = await backupFile.readAsBytes();
     final tempBox = await Hive.openBox('tempHistoryBox', bytes: backupContent);
-    final tempBoxItems = tempBox.toMap().entries;
-
-    for (var tempBoxItem in tempBoxItems) {
-      final tempHistory = tempBoxItem.value as History;
-      tempHistory.entryKind = HistoryEntryKind.normalize(tempHistory.entryKind);
-      final targetKey = tempHistory.key;
-      if (histories.get(targetKey) != null) {
-        if (histories
-            .get(targetKey)!
-            .lastWatchTime
-            .isBefore(tempHistory.lastWatchTime)) {
-          await histories.delete(targetKey);
-          await histories.put(targetKey, tempHistory);
+    try {
+      final tempBoxItems = tempBox.toMap().entries;
+      await HistoryStorageCoordinator().run(() async {
+        for (final tempBoxItem in tempBoxItems) {
+          final tempHistory = tempBoxItem.value as History;
+          tempHistory.entryKind =
+              HistoryEntryKind.normalize(tempHistory.entryKind);
+          final targetKey = tempHistory.key;
+          final existing = histories.get(targetKey);
+          if (existing == null ||
+              existing.lastWatchTime.isBefore(tempHistory.lastWatchTime)) {
+            await histories.put(targetKey, tempHistory);
+          }
         }
-      } else {
-        await histories.put(targetKey, tempHistory);
-      }
+      });
+    } finally {
+      await tempBox.close();
     }
-    await tempBox.close();
   }
 
   static Future<void> restoreCollectibles(String backupFilePath) async {
@@ -339,6 +343,11 @@ class GStorage {
 
   static Future<void> putSetting<T>(SettingKey<T> key, T value) async {
     await _setting.put(key.name, value);
+  }
+
+  static Stream<void> watchSettings(Iterable<SettingKey<Object?>> keys) {
+    final names = keys.map((key) => key.name).toSet();
+    return _setting.watch().where((event) => names.contains(event.key)).map((_) {});
   }
 
   static List<String> getStringListSettingByName(

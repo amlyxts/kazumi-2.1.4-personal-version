@@ -1,14 +1,17 @@
+import 'package:kazumi/services/video_source/video_source_format.dart';
+
 class PlaybackInitParams {
   final String videoUrl;
   final int offset;
   final bool isLocalPlayback;
+  final VideoSourceFormat videoSourceFormat;
   final int bangumiId;
   final String pluginName;
   final int episode;
   final int danmakuEpisodeNumber;
   final String pageUrl;
 
-  /// 集数排序号，语义同 EpisodeRef.sortNumber（在线解析自标题、离线为 episodeNumber）。
+  /// Parsed title number online, downloaded episode number offline.
   final int? sortNumber;
   final Map<String, String> httpHeaders;
   final bool adBlockerEnabled;
@@ -31,16 +34,12 @@ class PlaybackInitParams {
     required this.episodeTitle,
     required this.referer,
     required this.currentRoad,
+    this.videoSourceFormat = VideoSourceFormat.auto,
     this.pageUrl = '',
     this.sortNumber,
     this.coverUrl,
     this.bangumiName,
   });
-}
-
-enum DanmakuDestination {
-  chatRoom,
-  remoteDanmaku,
 }
 
 class SyncPlayChatMessage {

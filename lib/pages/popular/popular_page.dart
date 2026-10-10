@@ -1,45 +1,41 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
-import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/widget/bangumi_mirror_error_widget.dart';
-import 'package:kazumi/bean/widget/custom_dropdown_menu.dart';
+import 'package:kazumi/bean/widget/kazumi_menu.dart';
+import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/pages/popular/popular_controller.dart';
 import 'package:kazumi/bean/card/bangumi_card.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
-import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:kazumi/services/logging/logger.dart';
-import 'package:kazumi/pages/menu/menu.dart';
-import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/services/platform/desktop_window_config.dart';
 import 'package:kazumi/bean/appbar/drag_to_move_bar.dart' as dtb;
 import 'package:kazumi/utils/device.dart';
 
 class PopularPage extends StatefulWidget {
-  const PopularPage({super.key});
+  const PopularPage({
+    super.key,
+    required this.controller,
+  });
+
+  final PopularController controller;
 
   @override
   State<PopularPage> createState() => _PopularPageState();
 }
 
-class _PopularPageState extends State<PopularPage>
-    with AutomaticKeepAliveClientMixin {
-  DateTime? _lastPressedAt;
-  late NavigationBarState navigationBarState;
-  final FocusNode _focusNode = FocusNode();
-  final ScrollController scrollController = ScrollController();
-  final PopularController popularController = Modular.get<PopularController>();
-
-  // Key used to position the dropdown menu for the tag selector
-  final GlobalKey selectorKey = GlobalKey();
-
-  @override
-  bool get wantKeepAlive => true;
+class _PopularPageState extends State<PopularPage> {
+  late final ScrollController scrollController;
+  PopularController get popularController => widget.controller;
 
   @override
   void initState() {
     super.initState();
+    scrollController = ScrollController(
+      initialScrollOffset: popularController.scrollOffset,
+    );
     scrollController.addListener(scrollListener);
     if (popularController.trendList.isEmpty) {
       popularController.queryBangumiByTrend();
@@ -47,13 +43,7 @@ class _PopularPageState extends State<PopularPage>
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-  }
-
-  @override
   void dispose() {
-    _focusNode.dispose();
     scrollController.removeListener(scrollListener);
     scrollController.dispose();
     super.dispose();
@@ -74,96 +64,66 @@ class _PopularPageState extends State<PopularPage>
     }
   }
 
-  bool showWindowButton() {
-    return GStorage.getSetting(SettingsKeys.showWindowButton);
-  }
-
-  void onBackPressed(BuildContext context) {
-    if (KazumiDialog.observer.hasKazumiDialog) {
-      KazumiDialog.dismiss();
-      return;
-    }
-    if (_lastPressedAt == null ||
-        DateTime.now().difference(_lastPressedAt!) >
-            const Duration(seconds: 2)) {
-      _lastPressedAt = DateTime.now();
-      KazumiDialog.showToast(message: "再按一次退出应用", context: context);
-      return;
-    }
-    SystemNavigator.pop();
-  }
-
   @override
   Widget build(BuildContext context) {
-    super.build(context);
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (didPop) {
-          return;
-        }
-        onBackPressed(context);
-      },
-      child: Scaffold(
-        body: CustomScrollView(
-          controller: scrollController,
-          slivers: [
-            buildSliverAppBar(),
-            SliverToBoxAdapter(
-              child: Observer(
-                builder: (_) => AnimatedOpacity(
-                  opacity: popularController.isLoadingMore ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 300),
-                  child: popularController.isLoadingMore
-                      ? const LinearProgressIndicator(minHeight: 4)
-                      : const SizedBox(height: 4),
-                ),
+    return Scaffold(
+      body: CustomScrollView(
+        controller: scrollController,
+        slivers: [
+          buildSliverAppBar(),
+          SliverToBoxAdapter(
+            child: Observer(
+              builder: (_) => AnimatedOpacity(
+                opacity: popularController.isLoadingMore ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 300),
+                child: popularController.isLoadingMore
+                    ? const LinearProgressIndicator(minHeight: 4)
+                    : const SizedBox(height: 4),
               ),
             ),
-            SliverPadding(
-                padding: const EdgeInsets.fromLTRB(
-                    StyleString.cardSpace, 0, StyleString.cardSpace, 0),
-                sliver: Observer(builder: (_) {
-                  if (popularController.isTimeOut) {
-                    return SliverToBoxAdapter(
-                      child: SizedBox(
-                        height: 400,
-                        child: BangumiMirrorErrorWidget(
-                          onRetry: () {
-                            if (popularController.trendList.isEmpty) {
-                              popularController.queryBangumiByTrend();
-                            } else {
-                              popularController.queryBangumiByTag();
-                            }
-                          },
-                          onSettingsReturned: () {
-                            if (mounted) {
-                              setState(() {});
-                            }
-                          },
-                        ),
+          ),
+          SliverPadding(
+              padding: const EdgeInsets.fromLTRB(
+                  StyleString.cardSpace, 0, StyleString.cardSpace, 0),
+              sliver: Observer(builder: (_) {
+                if (popularController.isTimeOut) {
+                  return SliverToBoxAdapter(
+                    child: SizedBox(
+                      height: 400,
+                      child: BangumiMirrorErrorWidget(
+                        onRetry: () {
+                          if (popularController.trendList.isEmpty) {
+                            popularController.queryBangumiByTrend();
+                          } else {
+                            popularController.queryBangumiByTag();
+                          }
+                        },
+                        onSettingsReturned: () {
+                          if (mounted) {
+                            setState(() {});
+                          }
+                        },
                       ),
-                    );
-                  }
-                  return contentGrid(
-                    (popularController.currentTag == '')
-                        ? popularController.trendList
-                        : popularController.bangumiList,
+                    ),
                   );
-                })),
-          ],
-        ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () => scrollController.animateTo(0,
-              duration: const Duration(milliseconds: 350),
-              curve: Curves.easeOut),
-          child: const Icon(Icons.arrow_upward),
-        ),
+                }
+                return contentGrid(
+                  (popularController.currentTag == '')
+                      ? popularController.trendList
+                      : popularController.bangumiList,
+                );
+              })),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => scrollController.animateTo(0,
+            duration: const Duration(milliseconds: 350), curve: Curves.easeOut),
+        child: const Icon(Icons.arrow_upward),
       ),
     );
   }
 
-  Widget contentGrid(bangumiList) {
+  Widget contentGrid(List<BangumiItem> bangumiList) {
     int crossCount = 3;
     if (MediaQuery.sizeOf(context).width > LayoutBreakpoint.compact['width']!) {
       crossCount = 5;
@@ -187,11 +147,11 @@ class _PopularPageState extends State<PopularPage>
         ),
         delegate: SliverChildBuilderDelegate(
           (BuildContext context, int index) {
-            return bangumiList!.isNotEmpty
+            return bangumiList.isNotEmpty
                 ? BangumiCardV(bangumiItem: bangumiList[index])
                 : null;
           },
-          childCount: bangumiList!.isNotEmpty ? bangumiList!.length : 10,
+          childCount: bangumiList.isNotEmpty ? bangumiList.length : 10,
         ),
       ),
     );
@@ -231,24 +191,37 @@ class _PopularPageState extends State<PopularPage>
                     child: Observer(
                       builder: (_) {
                         final bool isTrend = popularController.currentTag == '';
-                        return InkWell(
-                          key: selectorKey,
-                          borderRadius: BorderRadius.circular(8),
-                          onTap: showTagMenu,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                isTrend ? '热门番组' : popularController.currentTag,
-                                style: theme.textTheme.headlineMedium!.copyWith(
-                                  fontWeight: fontWeight,
-                                  fontSize: fontSize,
-                                ),
+                        return KazumiMenuButton(
+                          animated: true,
+                          style: const MenuStyle(
+                            maximumSize: WidgetStatePropertyAll(Size(240, 350)),
+                          ),
+                          menuChildren: [
+                            for (final tag in ['', ...defaultAnimeTags])
+                              KazumiMenuItem(
+                                label: tag.isEmpty ? '热门番组' : tag,
+                                selected: tag == popularController.currentTag,
+                                onPressed: () => _selectTag(tag),
                               ),
-                              const SizedBox(width: 4),
-                              Icon(Icons.keyboard_arrow_down,
-                                  size: fontSize, color: theme.iconTheme.color),
-                            ],
+                          ],
+                          builder: (context, toggle) => InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: toggle,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  isTrend ? '热门番组' : popularController.currentTag,
+                                  style: theme.textTheme.headlineMedium!.copyWith(
+                                    fontWeight: fontWeight,
+                                    fontSize: fontSize,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(Icons.keyboard_arrow_down,
+                                    size: fontSize, color: theme.iconTheme.color),
+                              ],
+                            ),
                           ),
                         );
                       },
@@ -264,81 +237,38 @@ class _PopularPageState extends State<PopularPage>
   }
 
   List<Widget> buildActions() {
-    final actions = <Widget>[
+    return <Widget>[
       if (MediaQuery.of(context).orientation == Orientation.portrait)
         IconButton(
           tooltip: '搜索',
-          onPressed: () => Modular.to.pushNamed('/search/'),
+          onPressed: () => context.pushNamed('/search/'),
           icon: const Icon(Icons.search),
         ),
-    ];
-    actions.add(
       IconButton(
         tooltip: '历史记录',
-        onPressed: () => Modular.to.pushNamed('/settings/history/'),
+        onPressed: () => context.pushNamed('/settings/history/'),
         icon: const Icon(Icons.history),
       ),
-    );
-    if (isDesktop()) {
-      if (!showWindowButton()) {
-        actions.add(
-          IconButton(
-            tooltip: '退出',
-            onPressed: () => windowManager.close(),
-            icon: const Icon(Icons.close),
-          ),
-        );
-      }
-    }
-    return actions;
+      if (isDesktop() && !DesktopWindowConfig.showWindowButton)
+        IconButton(
+          tooltip: '退出',
+          onPressed: () => windowManager.close(),
+          icon: const Icon(Icons.close),
+        ),
+    ];
   }
 
-  Future<void> showTagMenu() async {
-    // Calculate the position of the button manually to position the dropdown menu.
-    // Using CustomDropdownMenu instead of PopupMenuButton to avoid flickering issues
-    // and to support different font sizes in the button and menu items.
-    final RenderBox renderBox =
-        selectorKey.currentContext!.findRenderObject() as RenderBox;
-    final Offset offset = renderBox.localToGlobal(Offset.zero);
-    final Size size = renderBox.size;
-
-    final selected = await Navigator.push<String>(
-      context,
-      PageRouteBuilder(
-        opaque: false,
-        barrierDismissible: true,
-        barrierColor: Colors.transparent,
-        pageBuilder: (context, animation, secondaryAnimation) {
-          return CustomDropdownMenu(
-            offset: offset,
-            buttonSize: size,
-            animation: animation,
-            maxWidth: 80,
-            items: [
-              '',
-              ...defaultAnimeTags,
-            ],
-            itemBuilder: (item) => item.isEmpty ? '热门番组' : item,
-          );
-        },
-        transitionDuration: const Duration(milliseconds: 200),
-        reverseTransitionDuration: const Duration(milliseconds: 150),
-      ),
-    );
-
-    if (selected == null) return;
-    if (selected == '' && popularController.currentTag != '') {
-      scrollController.animateTo(0,
-          duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-      popularController.setCurrentTag('');
+  Future<void> _selectTag(String selected) async {
+    if (!mounted || selected == popularController.currentTag) return;
+    scrollController.animateTo(0,
+        duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+    popularController.setCurrentTag(selected);
+    if (selected.isEmpty) {
       popularController.clearBangumiList();
       if (popularController.trendList.isEmpty) {
         await popularController.queryBangumiByTrend();
       }
-    } else if (selected != '' && selected != popularController.currentTag) {
-      scrollController.animateTo(0,
-          duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-      popularController.setCurrentTag(selected);
+    } else {
       await popularController.queryBangumiByTag(type: 'init');
     }
   }

@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:kazumi/request/config/api_endpoints.dart';
+import 'package:kazumi/request/core/bangumi_transport.dart';
 import 'package:kazumi/request/core/dio_logger_interceptor.dart';
 import 'package:kazumi/request/core/network_config.dart';
 import 'package:kazumi/services/logging/logger.dart';
@@ -10,53 +11,67 @@ class DioFactory {
   DioFactory._();
 
   static Dio? _apiDio;
-  static Dio? _githubDio;
+  static Dio? _bangumiDio;
+  static Dio? _rulesRepoDio;
   static Dio? _pluginDio;
   static Dio? _downloadDio;
 
   static Dio get apiDio => _apiDio ??= _create(
-        NetworkConfig.fromSettings(),
-        defaultHeaders: {
-          'referer': '',
-          'user-agent': getRandomUA(),
-        },
-        interceptors: [_BangumiMirrorInterceptor()],
-      );
+    NetworkConfig.fromSettings(),
+    defaultHeaders: {'referer': '', 'user-agent': getRandomUA()},
+  );
 
-  static Dio get githubDio => _githubDio ??= _create(
-        NetworkConfig.fromSettings(),
-        defaultHeaders: {
-          'accept': 'application/vnd.github+json',
-          'user-agent': getRandomUA(),
-        },
-        interceptors: [_GithubMirrorInterceptor()],
-      );
+  static Dio get bangumiDio {
+    if (_bangumiDio != null) return _bangumiDio!;
+    final config = NetworkConfig.fromSettings();
+    final dio = _create(
+      config,
+      defaultHeaders: {'referer': ''},
+      interceptors: [BangumiAccelerationInterceptor()],
+    );
+    dio.httpClientAdapter = BangumiEchAdapter(
+      fallback: dio.httpClientAdapter,
+      config: config,
+    );
+    return _bangumiDio = dio;
+  }
+
+  static Dio get rulesRepoDio => _rulesRepoDio ??= _create(
+    NetworkConfig.fromSettings(),
+    defaultHeaders: {'user-agent': getRandomUA()},
+    interceptors: [_RulesMirrorInterceptor()],
+  );
 
   static Dio get pluginDio => _pluginDio ??= _create(
-        NetworkConfig.fromSettings(),
-        defaultHeaders: {
-          'user-agent': getRandomUA(),
-          'accept-language': getRandomAcceptedLanguage(),
-        },
-      );
+    NetworkConfig.fromSettings(),
+    defaultHeaders: {
+      'user-agent': getRandomUA(),
+      'accept-language': getRandomAcceptedLanguage(),
+    },
+  );
 
   static Dio get downloadDio => _downloadDio ??= _create(
-        NetworkConfig.fromSettings(
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 30),
-        ),
-        defaultHeaders: {
-          'user-agent': getRandomUA(),
-        },
-      );
+    NetworkConfig.fromSettings(
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 30),
+    ),
+    defaultHeaders: {'user-agent': getRandomUA()},
+  );
 
   static Dio createForConfig(NetworkConfig config) {
     return _create(config);
   }
 
   static void reset() {
+    // Retire old adapters without interrupting requests already in flight.
+    _apiDio?.close();
+    _bangumiDio?.close();
+    _rulesRepoDio?.close();
+    _pluginDio?.close();
+    _downloadDio?.close();
     _apiDio = null;
-    _githubDio = null;
+    _bangumiDio = null;
+    _rulesRepoDio = null;
     _pluginDio = null;
     _downloadDio = null;
   }
@@ -66,10 +81,7 @@ class DioFactory {
     Map<String, dynamic> defaultHeaders = const {},
     List<Interceptor> interceptors = const [],
   }) {
-    // Keep the constructor tear-off form so the migration guard can flag
-    // direct Dio construction outside this factory with a simple search.
-    // ignore: unnecessary_constructor_name
-    final dio = Dio.new(
+    final dio = Dio(
       BaseOptions(
         connectTimeout: config.connectTimeout,
         receiveTimeout: config.receiveTimeout,
@@ -80,7 +92,6 @@ class DioFactory {
       ),
     );
     dio.httpClientAdapter = config.createAdapter();
-    dio.transformer = BackgroundTransformer();
     dio.interceptors.addAll(interceptors);
     if (config.enableLog) {
       dio.interceptors.add(DioLoggerInterceptor());
@@ -89,45 +100,7 @@ class DioFactory {
   }
 }
 
-class _BangumiMirrorInterceptor extends Interceptor {
-  static const _mirrorableHosts = {
-    'api.bgm.tv',
-    'next.bgm.tv',
-  };
-
-  @override
-  void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    final enableBangumiProxy =
-        GStorage.getSetting(SettingsKeys.enableBangumiProxy);
-    if (!enableBangumiProxy) {
-      handler.next(options);
-      return;
-    }
-
-    final uri = options.uri;
-    if (!_mirrorableHosts.contains(uri.host)) {
-      handler.next(options);
-      return;
-    }
-
-    final mirrored = ApiEndpoints.bangumiMirrorDomain +
-        uri.path +
-        (uri.hasQuery ? '?${uri.query}' : '');
-    KazumiLogger().d('Bangumi mirror: $mirrored');
-    options.path = mirrored;
-    handler.next(options);
-  }
-}
-
-class _GithubMirrorInterceptor extends Interceptor {
-  static const _mirrorableHosts = {
-    'api.github.com',
-    'github.com',
-    'raw.githubusercontent.com',
-    'objects.githubusercontent.com',
-    'github-releases.githubusercontent.com',
-  };
-
+class _RulesMirrorInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     final enableGitProxy = GStorage.getSetting(SettingsKeys.enableGitProxy);
@@ -136,14 +109,16 @@ class _GithubMirrorInterceptor extends Interceptor {
       return;
     }
 
-    final uri = options.uri;
-    if (!_mirrorableHosts.contains(uri.host)) {
+    final url = options.uri.toString();
+    if (!url.startsWith(ApiEndpoints.pluginShop)) {
       handler.next(options);
       return;
     }
 
-    final mirrored = '${ApiEndpoints.gitMirror}${uri.toString()}';
-    KazumiLogger().d('GitHub mirror: $mirrored');
+    final mirrored =
+        ApiEndpoints.pluginShopMirror +
+        url.substring(ApiEndpoints.pluginShop.length);
+    KazumiLogger().d('Rules mirror: $mirrored');
     options.path = mirrored;
     handler.next(options);
   }

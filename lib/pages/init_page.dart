@@ -1,51 +1,65 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/pages/my/my_controller.dart';
 import 'package:kazumi/services/sync/bangumi_sync_service.dart';
+import 'package:kazumi/services/sync/danmaku_shield_sync_service.dart';
 import 'package:kazumi/services/sync/webdav.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:kazumi/services/logging/logger.dart';
-import 'package:provider/provider.dart';
-import 'package:kazumi/bean/settings/theme_provider.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
 import 'package:kazumi/pages/download/download_controller.dart';
+import 'package:kazumi/pages/plugin_editor/plugin_update_actions.dart';
 import 'package:kazumi/services/download/background_download_service.dart';
 import 'package:kazumi/services/platform/windows_shortcut.dart';
 import 'package:kazumi/services/platform/platform_environment_service.dart';
+import 'package:kazumi/services/update/startup_update_check.dart';
+import 'package:kazumi/navigation.dart';
 
 class InitPage extends StatefulWidget {
-  const InitPage({super.key});
+  const InitPage({
+    super.key,
+    required this.pluginsController,
+    required this.collectController,
+    required this.shaderAssetService,
+    required this.myController,
+    required this.downloadController,
+    required this.danmakuShieldSync,
+  });
+
+  final PluginsController pluginsController;
+  final CollectController collectController;
+  final ShaderAssetService shaderAssetService;
+  final MyController myController;
+  final DownloadController downloadController;
+  final DanmakuShieldSyncService danmakuShieldSync;
 
   @override
   State<InitPage> createState() => _InitPageState();
 }
 
 class _InitPageState extends State<InitPage> {
-  final PluginsController pluginsController = Modular.get<PluginsController>();
-  final CollectController collectController = Modular.get<CollectController>();
-  final ShaderAssetService shaderAssetService =
-      Modular.get<ShaderAssetService>();
-  final MyController myController = Modular.get<MyController>();
-  final DownloadController downloadController =
-      Modular.get<DownloadController>();
-  late final ThemeProvider themeProvider;
+  PluginsController get pluginsController => widget.pluginsController;
+  CollectController get collectController => widget.collectController;
+  ShaderAssetService get shaderAssetService => widget.shaderAssetService;
+  MyController get myController => widget.myController;
+  DownloadController get downloadController => widget.downloadController;
 
   @override
   void initState() {
     super.initState();
-    themeProvider = Provider.of<ThemeProvider>(context, listen: false);
-    _initializeApp();
+    unawaited(_initializeApp());
   }
 
   Future<void> _initializeApp() async {
+    widget.danmakuShieldSync.start();
     _migrateStorage();
     _loadShaders();
-    _loadDanmakuShield();
+    unawaited(myController.loadShieldList());
     _webDavInit();
     _bangumiInit();
     try {
@@ -56,13 +70,31 @@ class _InitPageState extends State<InitPage> {
     }
 
     await _checkRunningOnX11();
-    await _pluginInit();
     await _showShortcutDialog();
+    await _pluginInit();
 
+    if (!mounted) {
+      return;
+    }
+    // First launch: no installed rules yet, hand over to the onboarding flow.
+    // OnboardingPage takes care of navigating to the default page and
+    // triggering the auto update check afterwards.
+    if (pluginsController.pluginList.isEmpty) {
+      context.navigate('/onboarding');
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+    final updateController = myController;
+    unawaited(runStartupUpdateCheck(
+      isEnabled: () => GStorage.getSetting(SettingsKeys.autoUpdate),
+      checkForUpdate: () async {
+        await updateController.checkUpdate(type: 'auto');
+      },
+    ));
     _startDefaultPage();
-    // delay to ensure that the default page is fully loaded
-    await Future.delayed(const Duration(milliseconds: 500));
-    _update();
   }
 
   void _setupBackgroundDownloadNavigation() {
@@ -71,8 +103,11 @@ class _InitPageState extends State<InitPage> {
     backgroundService.onNavigateToDownloadRequested = () {
       Future.delayed(const Duration(milliseconds: 300), () {
         try {
-          if (Modular.to.path.contains('/download')) return;
-          Modular.to.pushNamed('/settings/download/');
+          final navigationContext = rootNavigatorKey.currentContext;
+          if (navigationContext == null || !navigationContext.mounted) return;
+          final path = navigationContext.routeState(listen: false).uri.path;
+          if (path.contains('/download')) return;
+          navigationContext.pushNamed('/settings/download/');
         } catch (e) {
           KazumiLogger()
               .w('InitPage: failed to navigate to download page', error: e);
@@ -114,10 +149,10 @@ class _InitPageState extends State<InitPage> {
   void _startDefaultPage() {
     final defaultStartupPage =
         GStorage.getSetting(SettingsKeys.defaultStartupPage);
-    // Workaround for dynamic_color. dynamic_color need PlatformChannel to get color, it takes time.
-    // setDynamic here to avoid white screen flash when themeMode is dark.
-    themeProvider.setDynamic(GStorage.getSetting(SettingsKeys.useDynamicColor));
-    Modular.to.navigate(defaultStartupPage);
+    if (!mounted) {
+      return;
+    }
+    context.navigate(defaultStartupPage);
   }
 
   // migrate collect from old version (favorites)
@@ -129,26 +164,27 @@ class _InitPageState extends State<InitPage> {
     await shaderAssetService.copyShadersToExternalDirectory();
   }
 
-  Future<void> _loadDanmakuShield() async {
-    myController.loadShieldList();
-  }
-
   Future<void> _webDavInit() async {
     bool webDavEnable = await GStorage.getSetting(SettingsKeys.webDavEnable);
+    bool webDavEnableHistory =
+        await GStorage.getSetting(SettingsKeys.webDavEnableHistory);
     if (webDavEnable) {
       var webDav = WebDav();
       KazumiLogger().i('WebDav: Starting WebDav initialization');
       try {
         await webDav.init();
-        try {
-          await webDav.syncHistory();
-          KazumiLogger().i('WebDav: Completed syncing watch history');
-        } catch (e, stackTrace) {
-          KazumiLogger().w(
-            'WebDav: automatic watch history sync failed',
-            error: e,
-            stackTrace: stackTrace,
-          );
+        await widget.danmakuShieldSync.syncIfEnabled();
+        if (webDavEnableHistory) {
+          try {
+            await webDav.syncHistory();
+            KazumiLogger().i('WebDav: Completed syncing watch history');
+          } catch (e, stackTrace) {
+            KazumiLogger().w(
+              'WebDav: automatic watch history sync failed',
+              error: e,
+              stackTrace: stackTrace,
+            );
+          }
         }
       } catch (e, stackTrace) {
         KazumiLogger().w(
@@ -161,22 +197,20 @@ class _InitPageState extends State<InitPage> {
   }
 
   Future<void> _bangumiInit() async {
-    bool bangumiEnable =
-        await GStorage.getSetting(SettingsKeys.bangumiSyncEnable);
+    final bangumiEnable = GStorage.getSetting(SettingsKeys.bangumiSyncEnable);
     if (bangumiEnable) {
-      var bangumi = BangumiSyncService();
+      final bangumi = BangumiSyncService();
       KazumiLogger().i('Bangumi: Starting Bangumi initialization');
       try {
-        await bangumi.init();
+        await bangumi.ping();
       } catch (e) {
-        bangumi.reset();
-        await GStorage.putSetting(SettingsKeys.bangumiSyncEnable, false);
         KazumiLogger().w(
-          'Bangumi: initialization failed, disabling Bangumi sync until user re-enables it',
+          'Bangumi: initialization failed; keeping sync enabled for retry',
           error: e,
         );
         KazumiDialog.showToast(
-          message: '初始化Bangumi失败，已关闭 Bangumi 同步: ${e.toString()}',
+          message:
+              'Bangumi 暂未连接，同步设置已保留：${BangumiSyncService.describeError(e)}',
         );
       }
     }
@@ -255,132 +289,40 @@ class _InitPageState extends State<InitPage> {
   }
 
   Future<void> _pluginInit() async {
-    String statementsText = '';
     try {
       await pluginsController.init();
-      statementsText =
-          await rootBundle.loadString("assets/statements/statements.txt");
-      _pluginUpdate();
-    } catch (_) {}
-    if (pluginsController.pluginList.isEmpty) {
-      await KazumiDialog.show(
-        clickMaskDismiss: false,
-        builder: (context) {
-          return PopScope(
-            canPop: false,
-            child: AlertDialog(
-              title: const Text('免责声明'),
-              scrollable: true,
-              content: Text(statementsText),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    exit(0);
-                  },
-                  child: Text(
-                    '退出',
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.outline),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () async {
-                    try {
-                      await pluginsController.copyPluginsToExternalDirectory();
-                    } catch (_) {}
-                    KazumiDialog.dismiss();
-                    if (!Platform.isAndroid) {
-                      return;
-                    }
-                    await _switchUpdateMirror();
-                  },
-                  child: const Text('已阅读并同意'),
-                ),
-              ],
-            ),
-          );
-        },
+      unawaited(_pluginUpdate());
+    } catch (error, stackTrace) {
+      KazumiLogger().e(
+        'Plugin: failed to initialize rules',
+        error: error,
+        stackTrace: stackTrace,
       );
     }
   }
 
-  // The function is not completed yet
-  // We simply disable update when the user is using F-Droid mirror
-  // We are trying to meet F-Droid requirement to submit the app
-  // After the app is submitted, we will complete the function
-  Future<void> _switchUpdateMirror() async {
-    await KazumiDialog.show(
-      clickMaskDismiss: false,
-      builder: (context) {
-        return PopScope(
-          canPop: false,
-          child: AlertDialog(
-            title: const Text('更新来源'),
-            content: const Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    '您希望从哪里获取应用更新？',
-                    textAlign: TextAlign.left,
-                  ),
-                ),
-                Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    'Github 检查更新为大多数情况下的最佳选择。如果您使用 F-Droid 应用商店，请选择 F-Droid。',
-                    textAlign: TextAlign.left,
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  GStorage.putSetting(SettingsKeys.autoUpdate, true);
-                  KazumiDialog.dismiss();
-                },
-                child: const Text(
-                  'Github',
-                ),
-              ),
-              TextButton(
-                onPressed: () {
-                  GStorage.putSetting(SettingsKeys.autoUpdate, false);
-                  KazumiDialog.dismiss();
-                },
-                child: Text(
-                  'F-Droid',
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.outline),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _update() async {
-    bool autoUpdate = await GStorage.getSetting(SettingsKeys.autoUpdate);
-    if (autoUpdate) {
-      Modular.get<MyController>().checkUpdate(type: 'auto');
-    }
-  }
-
   Future<void> _pluginUpdate() async {
-    await pluginsController.queryPluginHTTPList();
-    int count = 0;
-    for (var plugin in pluginsController.pluginList) {
-      if (pluginsController.pluginUpdateStatus(plugin) == 'updatable') {
-        count++;
-      }
+    final checkOnStartup =
+        GStorage.getSetting(SettingsKeys.checkPluginUpdateOnStartup);
+    late final int count;
+    try {
+      count = await pluginsController.checkPluginUpdatesOnStartup(
+        enabled: checkOnStartup,
+      );
+    } catch (_) {
+      return;
     }
     if (count != 0) {
-      KazumiDialog.showToast(message: '检测到 $count 条规则可以更新');
+      KazumiDialog.showToast(
+        message: '检测到 $count 条规则可以更新',
+        showActionButton: true,
+        actionLabel: '全部更新',
+        onActionPressed: () => updateAllPluginsWithFeedback(
+          pluginsController,
+          ensureCatalog: false,
+        ),
+        duration: const Duration(seconds: 5),
+      );
     }
   }
 

@@ -1,3 +1,5 @@
+import 'package:kazumi/services/player/syncplay_endpoint.dart';
+
 enum SettingGroup {
   player,
   danmaku,
@@ -40,42 +42,10 @@ class SettingKey<T> {
 // Add new settings here. SettingsKeys is the public typed registry used by
 // callers; new keys can use literal string names directly.
 class SettingsKeys {
-  // [my修改] 自定义下载路径相关
-  static const customDownloadPath = SettingKey<String>(
-    _SettingBoxKey.customDownloadPath,
-    '', // 默认为空字符串
-    group: SettingGroup.download,
-  );
-
-  // [本地播放] 记住上次浏览的本地视频目录
-  static const localVideoLastDirectory = SettingKey<String>(
-    'localVideoLastDirectory',
-    '',
-    group: SettingGroup.misc,
-  );
-
   static const hAenable = SettingKey<bool>(
     _SettingBoxKey.hAenable,
     true,
     group: SettingGroup.player,
-  );
-  // [my修改] 去色带 (deband)，低清/老片源建议开启
-  static const playerDebandEnable = SettingKey<bool>(
-    'playerDebandEnable',
-    false,
-    group: SettingGroup.player,
-  );
-
-  // [my修改] 本地视频分类: 分类名列表 (JSON数组, 顺序即显示顺序) 与 文件夹归属 (JSON: 文件夹id→分类名)
-  static const localVideoCategories = SettingKey<String>(
-    'localVideoCategories',
-    '[]',
-    group: SettingGroup.misc,
-  );
-  static const localVideoCategoryAssign = SettingKey<String>(
-    'localVideoCategoryAssign',
-    '{}',
-    group: SettingGroup.misc,
   );
   static const hardwareDecoder = SettingKey<String>(
     _SettingBoxKey.hardwareDecoder,
@@ -89,6 +59,11 @@ class SettingsKeys {
   );
   static const autoUpdate = SettingKey<bool>(
     _SettingBoxKey.autoUpdate,
+    true,
+    group: SettingGroup.update,
+  );
+  static const checkPluginUpdateOnStartup = SettingKey<bool>(
+    'checkPluginUpdateOnStartup',
     true,
     group: SettingGroup.update,
   );
@@ -171,6 +146,11 @@ class SettingsKeys {
   static const danmakuDeduplication = SettingKey<bool>(
     _SettingBoxKey.danmakuDeduplication,
     false,
+    group: SettingGroup.danmaku,
+  );
+  static const danmakuChConvert = SettingKey<int>(
+    'danmakuChConvert',
+    0,
     group: SettingGroup.danmaku,
   );
   static const danmakuArea = SettingKey<double>(
@@ -260,7 +240,7 @@ class SettingsKeys {
   );
   static const showPlayerError = SettingKey<bool>(
     _SettingBoxKey.showPlayerError,
-    true,
+    false,
     group: SettingGroup.player,
   );
   static const oledEnhance = SettingKey<bool>(
@@ -275,12 +255,23 @@ class SettingsKeys {
   );
   static const enableGitProxy = SettingKey<bool>(
     _SettingBoxKey.enableGitProxy,
-    false,
+    true,
     group: SettingGroup.proxy,
   );
   static const enableBangumiProxy = SettingKey<bool>(
     _SettingBoxKey.enableBangumiProxy,
-    false,
+    true,
+    group: SettingGroup.proxy,
+  );
+  static const imageAcceleration = SettingKey<String>(
+    'imageAcceleration',
+    'ech',
+    group: SettingGroup.proxy,
+  );
+  // An unset mode inherits the old mirror switch (enabled by default).
+  static const bangumiAcceleration = SettingKey<String>(
+    'bangumiAcceleration',
+    '',
     group: SettingGroup.proxy,
   );
   static const enableSystemProxy = SettingKey<bool>(
@@ -291,11 +282,6 @@ class SettingsKeys {
   static const defaultStartupPage = SettingKey<String>(
     _SettingBoxKey.defaultStartupPage,
     '/tab/popular/',
-    group: SettingGroup.interface,
-  );
-  static const isWideScreen = SettingKey<bool>(
-    _SettingBoxKey.isWideScreen,
-    false,
     group: SettingGroup.interface,
   );
   static const webDavEnable = SettingKey<bool>(
@@ -312,6 +298,26 @@ class SettingsKeys {
     _SettingBoxKey.webDavEnableCollect,
     false,
     group: SettingGroup.webdav,
+  );
+  static const webDavEnableDanmakuShield = SettingKey<bool>(
+    'webDavEnableDanmakuShield',
+    false,
+    group: SettingGroup.webdav,
+  );
+  static const danmakuShieldSyncDeviceId = SettingKey<String>(
+    'danmakuShieldSyncDeviceId',
+    '',
+    group: SettingGroup.sync,
+  );
+  static const danmakuShieldSyncState = SettingKey<String>(
+    'danmakuShieldSyncState',
+    '',
+    group: SettingGroup.sync,
+  );
+  static const danmakuShieldSyncCorruptState = SettingKey<String>(
+    'danmakuShieldSyncCorruptState',
+    '',
+    group: SettingGroup.sync,
   );
   static const webDavURL = SettingKey<String>(
     _SettingBoxKey.webDavURL,
@@ -331,6 +337,12 @@ class SettingsKeys {
   static const lowMemoryMode = SettingKey<bool>(
     _SettingBoxKey.lowMemoryMode,
     false,
+    group: SettingGroup.player,
+  );
+  // Null preserves the legacy lowMemoryMode choice until a policy is selected.
+  static const lowMemoryPolicy = SettingKey<String?>(
+    'lowMemoryPolicy',
+    null,
     group: SettingGroup.player,
   );
   static const showWindowButton = SettingKey<bool>(
@@ -355,7 +367,12 @@ class SettingsKeys {
   );
   static const syncPlayEndPoint = SettingKey<String>(
     _SettingBoxKey.syncPlayEndPoint,
-    '127.0.0.1:8999',
+    defaultSyncPlayEndPoint,
+    group: SettingGroup.player,
+  );
+  static const syncPlayUserName = SettingKey<String>(
+    'syncPlayUserName',
+    '',
     group: SettingGroup.player,
   );
   static const androidEnableOpenSLES = SettingKey<bool>(
@@ -380,6 +397,27 @@ class SettingsKeys {
   );
   static const disableSuperResolutionWarning = SettingKey<bool>(
     _SettingBoxKey.disableSuperResolutionWarning,
+    false,
+    group: SettingGroup.player,
+  );
+  // [my修改] 记住上次浏览的本地视频目录
+  static const localVideoLastDirectory = SettingKey<String>(
+    _SettingBoxKey.localVideoLastDirectory,
+    '',
+    group: SettingGroup.misc,
+  );
+  static const localVideoCategories = SettingKey<String>(
+    _SettingBoxKey.localVideoCategories,
+    '[]',
+    group: SettingGroup.misc,
+  );
+  static const localVideoCategoryAssign = SettingKey<String>(
+    _SettingBoxKey.localVideoCategoryAssign,
+    '{}',
+    group: SettingGroup.misc,
+  );
+  static const playerDebandEnable = SettingKey<bool>(
+    _SettingBoxKey.playerDebandEnable,
     false,
     group: SettingGroup.player,
   );
@@ -448,9 +486,9 @@ class SettingsKeys {
     true,
     group: SettingGroup.interface,
   );
-  static const showAnimeCounter = SettingKey<bool>(
-    _SettingBoxKey.showAnimeCounter,
-    false,
+  static const defaultCollectLayout = SettingKey<String>(
+    'defaultCollectLayout',
+    'list',
     group: SettingGroup.interface,
   );
   static const downloadParallelEpisodes = SettingKey<int>(
@@ -466,6 +504,18 @@ class SettingsKeys {
   static const downloadDanmaku = SettingKey<bool>(
     _SettingBoxKey.downloadDanmaku,
     true,
+    group: SettingGroup.download,
+  );
+  static const downloadDirectory = SettingKey<String>(
+    _SettingBoxKey.downloadDirectory,
+    '',
+    group: SettingGroup.download,
+  );
+  // macOS only: security-scoped bookmark that keeps downloadDirectory
+  // writable across app restarts under the sandbox.
+  static const downloadDirectoryBookmark = SettingKey<String>(
+    'downloadDirectoryBookmark',
+    '',
     group: SettingGroup.download,
   );
   static const shortcutDialogShown = SettingKey<bool>(
@@ -534,6 +584,7 @@ class SettingsKeys {
     hardwareDecoder,
     searchEnhanceEnable,
     autoUpdate,
+    checkPluginUpdateOnStartup,
     alwaysOntop,
     defaultPlaySpeed,
     defaultShortcutForwardPlaySpeed,
@@ -550,6 +601,7 @@ class SettingsKeys {
     danmakuBottom,
     danmakuMassive,
     danmakuDeduplication,
+    danmakuChConvert,
     danmakuArea,
     danmakuColor,
     danmakuDuration,
@@ -572,21 +624,28 @@ class SettingsKeys {
     displayMode,
     enableGitProxy,
     enableBangumiProxy,
+    imageAcceleration,
+    bangumiAcceleration,
     enableSystemProxy,
     defaultStartupPage,
-    isWideScreen,
     webDavEnable,
     webDavEnableHistory,
     webDavEnableCollect,
+    webDavEnableDanmakuShield,
+    danmakuShieldSyncDeviceId,
+    danmakuShieldSyncState,
+    danmakuShieldSyncCorruptState,
     webDavURL,
     webDavUsername,
     webDavPassword,
     lowMemoryMode,
+    lowMemoryPolicy,
     showWindowButton,
     useDynamicColor,
     exitBehavior,
     playerDebugMode,
     syncPlayEndPoint,
+    syncPlayUserName,
     androidEnableOpenSLES,
     androidVideoRenderer,
     androidAutoEnterPIP,
@@ -605,10 +664,12 @@ class SettingsKeys {
     proxyUrl,
     proxyTestUrl,
     showRating,
-    showAnimeCounter,
+    defaultCollectLayout,
     downloadParallelEpisodes,
     downloadParallelSegments,
     downloadDanmaku,
+    downloadDirectory,
+    downloadDirectoryBookmark,
     shortcutDialogShown,
     bangumiSyncEnable,
     bangumiAccessToken,
@@ -638,9 +699,6 @@ class SettingsKeys {
 // New settings do not need to be added here unless they intentionally reuse an
 // existing persisted key.
 class _SettingBoxKey {
-  // [my修改] 自定义下载路径相关
-  static const String customDownloadPath = 'customDownloadPath';
-
   static const String hAenable = 'hAenable',
       hardwareDecoder = 'hardwareDecoder',
       searchEnhanceEnable = 'searchEnhanceEnable',
@@ -685,9 +743,6 @@ class _SettingBoxKey {
       enableBangumiProxy = 'enableBangumiProxy',
       enableSystemProxy = 'enableSystemProxy',
       defaultStartupPage = 'defaultStartupPage',
-
-      /// Deprecated
-      isWideScreen = 'isWideScreen',
       webDavEnable = 'webDavEnable',
       webDavEnableHistory = 'webDavEnableHistory',
       webDavEnableCollect = 'webDavEnableCollect',
@@ -705,6 +760,10 @@ class _SettingBoxKey {
       androidAutoEnterPIP = 'androidAutoEnterPIP',
       defaultSuperResolutionMode = 'defaultSuperResolutionType',
       disableSuperResolutionWarning = 'superResolutionWarn',
+      localVideoLastDirectory = 'localVideoLastDirectory',
+      localVideoCategories = 'localVideoCategories',
+      localVideoCategoryAssign = 'localVideoCategoryAssign',
+      playerDebandEnable = 'playerDebandEnable',
       playerDisableAnimations = 'playerDisableAnimations',
       playerLogLevel = 'playerLogLevel',
       timelineNotShowAbandonedBangumis = 'timelineNotShowAbandonedBangumis',
@@ -718,10 +777,10 @@ class _SettingBoxKey {
       proxyUrl = 'proxyUrl',
       proxyTestUrl = 'proxyTestUrl',
       showRating = 'showRating',
-      showAnimeCounter = 'showAnimeCounter',
       downloadParallelEpisodes = 'downloadParallelEpisodes',
       downloadParallelSegments = 'downloadParallelSegments',
       downloadDanmaku = 'downloadDanmaku',
+      downloadDirectory = 'downloadDirectory',
       shortcutDialogShown = 'shortcutDialogShown',
       bangumiSyncEnable = 'bangumiSyncEnable',
       bangumiAccessToken = 'bangumiAccessToken',

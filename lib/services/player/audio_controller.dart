@@ -4,16 +4,14 @@ import 'package:audio_session/audio_session.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_service_mpris/audio_service_mpris.dart';
 import 'package:kazumi/services/logging/logger.dart';
+import 'package:kazumi/services/network/proxy_aware_image_cache_manager.dart';
+import 'package:kazumi/utils/async_session.dart';
 
 typedef AudioCallback = Future<void> Function();
 typedef AudioSeekCallback = Future<void> Function(Duration position);
 
 class AudioController {
-  AudioController._();
-
-  static final AudioController _instance = AudioController._();
-
-  factory AudioController() => _instance;
+  AudioController();
 
   _KazumiAudioHandler? _handler;
   Future<void>? _initFuture;
@@ -25,7 +23,10 @@ class AudioController {
   AudioCallback? _onPause;
   bool _playInterrupted = false;
   bool? _lastAudioSessionActive;
-  int _generation = 0;
+  final AsyncSessionOwner _sessions = AsyncSessionOwner();
+  AsyncSession? _boundSession;
+  bool _artworkPending = false;
+  Uri? _artworkUri;
 
   Future<void> ensureInitialized() {
     _initFuture ??= _initialize();
@@ -144,9 +145,16 @@ class AudioController {
     required AudioCallback onSkipToNext,
     required AudioCallback onSkipToPrevious,
     required AudioSeekCallback onSeek,
+    required String? artworkUrl,
   }) async {
+    final binding = _sessions.begin();
+    _boundSession = null;
+    _resetArtwork();
+    _clearCallbacks();
     await ensureInitialized();
-    _generation++;
+    if (binding.isStale) {
+      return;
+    }
     _onPlay = onPlay;
     _onPause = onPause;
     _handler?.bindCallbacks(
@@ -156,9 +164,14 @@ class AudioController {
       onSkipToPrevious: onSkipToPrevious,
       onSeek: onSeek,
     );
+    _boundSession = binding;
+    if (artworkUrl != null && artworkUrl.isNotEmpty) {
+      _artworkPending = true;
+      unawaited(_resolveArtwork(binding, artworkUrl));
+    }
   }
 
-  void clearCallbacks() {
+  void _clearCallbacks() {
     _onPlay = null;
     _onPause = null;
     _handler?.clearCallbacks();
@@ -169,7 +182,6 @@ class AudioController {
     required String title,
     String? album,
     String? artist,
-    Uri? artUri,
     Duration? duration,
     required bool playing,
     required bool loading,
@@ -182,19 +194,20 @@ class AudioController {
     required bool canSkipToNext,
     required bool canSkipToPrevious,
   }) async {
-    final gen = _generation;
+    final binding = _boundSession;
+    if (binding == null || binding.isStale) return;
     await ensureInitialized();
-    if (gen != _generation) return;
+    if (binding.isStale) return;
     await _setAudioSessionActive(playing);
+    if (binding.isStale || _artworkPending) return;
     final handler = _handler;
-    if (handler == null || gen != _generation) return;
+    if (handler == null) return;
 
     final mediaItemCacheKey = [
       mediaId,
       title,
       album ?? '',
       artist ?? '',
-      artUri?.toString() ?? '',
       (duration ?? Duration.zero).inMilliseconds.toString(),
     ].join('|');
 
@@ -206,7 +219,7 @@ class AudioController {
           title: title,
           album: album,
           artist: artist,
-          artUri: artUri,
+          artUri: _artworkUri,
           duration: duration,
         ),
       );
@@ -263,14 +276,70 @@ class AudioController {
     );
   }
 
-  Future<void> deactivate() async {
-    _generation++;
+  void _resetArtwork() {
+    _artworkPending = false;
+    _artworkUri = null;
+  }
+
+  /// Resolves the session artwork to a local file before the media item is
+  /// published, so each item reaches the platform in a single write.
+  ///
+  /// A follow-up write is unsafe at any point in the session: the plugin
+  /// dispatches `setMediaItem` to a detached thread while `setState` runs
+  /// inline, so it can land after [deactivate] and repost the notification
+  /// that the idle state just cancelled.
+  Future<void> _resolveArtwork(AsyncSession binding, String artworkUrl) async {
+    Uri? resolved;
+    try {
+      final file = await ProxyAwareImageCacheManager.instance
+          .getSingleFile(artworkUrl)
+          .timeout(const Duration(seconds: 8));
+      resolved = Uri.file(file.path);
+    } catch (e) {
+      KazumiLogger().w('AudioController: artwork resolution failed', error: e);
+    }
+    if (binding.isStale) return;
+    _artworkUri = resolved;
+    _artworkPending = false;
+  }
+
+  Future<void> deactivate() {
+    final deactivation = _sessions.begin();
+    _boundSession = null;
+    _resetArtwork();
+    _clearCallbacks();
     _playInterrupted = false;
-    await ensureInitialized();
+    final initialization = _initFuture;
+    if (initialization == null) {
+      return Future<void>.value();
+    }
+    return _deactivate(deactivation, initialization);
+  }
+
+  Future<void> _deactivate(
+    AsyncSession deactivation,
+    Future<void> initialization,
+  ) async {
+    await initialization;
+    if (deactivation.isStale) return;
     _lastMediaItemCacheKey = null;
     _lastAudioSessionActive = null;
     await _setAudioSessionActive(false);
-    _handler?.updatePlaybackState(
+    if (deactivation.isStale) return;
+    final handler = _handler;
+    if (handler == null) return;
+    // The platform only stops on a transition into idle. Retain the current
+    // controls so the intermediate state cannot repaint the notification.
+    final current = handler.playbackState.value;
+    if (current.processingState == AudioProcessingState.idle) {
+      handler.updatePlaybackState(
+        current.copyWith(
+          processingState: AudioProcessingState.completed,
+          playing: false,
+        ),
+      );
+    }
+    handler.updatePlaybackState(
       PlaybackState(
         controls: [],
         systemActions: const {},

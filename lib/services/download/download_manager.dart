@@ -8,9 +8,11 @@ import 'package:kazumi/request/core/network_exception.dart';
 import 'package:kazumi/utils/m3u8_parser.dart';
 import 'package:kazumi/utils/m3u8_ad_filter.dart';
 import 'package:kazumi/utils/format.dart' as fmt;
+import 'package:kazumi/utils/file_system.dart';
 import 'package:kazumi/services/logging/logger.dart';
+import 'package:kazumi/services/download/download_directory_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 
 class _NotM3u8Exception implements Exception {
   final String message;
@@ -100,8 +102,10 @@ abstract class IDownloadManager {
   void cancel(String recordKey, int episodeNumber);
   String? getLocalVideoPath(DownloadEpisode? episode);
   Future<void> deleteEpisodeFiles(
-      int bangumiId, String pluginName, int episodeNumber);
-  Future<void> deleteRecordFiles(int bangumiId, String pluginName);
+      int bangumiId, String pluginName, int episodeNumber,
+      {DownloadEpisode? episode});
+  Future<void> deleteRecordFiles(int bangumiId, String pluginName,
+      {DownloadRecord? record});
   double getSpeed(String recordKey, int episodeNumber);
 }
 
@@ -134,6 +138,7 @@ class DownloadManager implements IDownloadManager {
   }
 
   final DownloadHttpClient _http = DownloadHttpClient.instance;
+  final DownloadDirectoryService _directoryService = DownloadDirectoryService();
 
   final Map<String, DownloadTask> _activeTasks = {};
   final List<DownloadRequest> _queue = [];
@@ -211,28 +216,43 @@ class DownloadManager implements IDownloadManager {
   bool isDownloading(String recordKey, int episodeNumber) =>
       _activeTasks.containsKey(_taskKey(recordKey, episodeNumber));
 
-  // [my修改] 自定义下载路径
-  Future<String> get _downloadBaseDir async {
-    // 1. 尝试读取用户设置的自定义路径
-    final String customPath = GStorage.getSetting(SettingsKeys.customDownloadPath);
-
-    if (customPath.isNotEmpty) {
-      final dir = Directory(customPath);
-      // 自动创建目录
-      if (!dir.existsSync()) {
-        dir.createSync(recursive: true);
-      }
-      return customPath;
-    }
-
-    // 2. 如果没设置，则使用原本的默认 C 盘路径
-    final appSupport = await getApplicationSupportDirectory();
-    return '${appSupport.path}/downloads';
+  String _getEpisodeDir(String downloadBase, int bangumiId, String pluginName,
+      int episodeNumber) {
+    return path.join(
+        downloadBase, '${bangumiId}_$pluginName', '$episodeNumber');
   }
 
-  String getEpisodeDir(String downloadBase, int bangumiId, String pluginName,
-      int episodeNumber) {
-    return '$downloadBase/${bangumiId}_$pluginName/$episodeNumber';
+  /// Resolves the episode directory (kept from a previous attempt if any),
+  /// verifies it is writable, and persists it on the episode.
+  Future<String> _prepareEpisodeDir(
+    DownloadEpisode episode,
+    int bangumiId,
+    String pluginName,
+    int episodeNumber,
+  ) async {
+    final storedDir = episode.downloadDirectory.trim();
+    final episodeDir = storedDir.isNotEmpty
+        ? storedDir
+        : _getEpisodeDir(await _directoryService.getDownloadDirectory(),
+            bangumiId, pluginName, episodeNumber);
+    await ensureDirectoryWritable(episodeDir);
+    episode.downloadDirectory = episodeDir;
+    await _checkStorageSpace(episodeDir);
+    return episodeDir;
+  }
+
+  /// Directory to remove for an episode: the recorded one, or the default
+  /// location for episodes that never started downloading.
+  Future<String> _episodeDirForDeletion(
+    DownloadEpisode? episode,
+    int bangumiId,
+    String pluginName,
+    int episodeNumber,
+  ) async {
+    final storedDir = episode?.downloadDirectory.trim() ?? '';
+    if (storedDir.isNotEmpty) return storedDir;
+    return _getEpisodeDir(await getDefaultDownloadDirectory(), bangumiId,
+        pluginName, episodeNumber);
   }
 
   @override
@@ -336,6 +356,8 @@ class DownloadManager implements IDownloadManager {
     final key = _taskKey(recordKey, episodeNumber);
     final task = _activeTasks[key];
     if (task != null) {
+      // The unwinding worker then leaves its episode paused, never active.
+      task.isPaused = true;
       task.cancelToken.cancel('cancelled');
       _activeTasks.remove(key);
       _queue.removeWhere(
@@ -380,9 +402,12 @@ class DownloadManager implements IDownloadManager {
   }) async {
     final key = _taskKey(task.recordKey, task.episodeNumber);
     try {
+      final episodeDir = await _prepareEpisodeDir(
+          episode, bangumiId, pluginName, task.episodeNumber);
+
       episode.status = DownloadStatus.downloading;
       episode.networkM3u8Url = m3u8Url;
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
 
       String m3u8Content;
       try {
@@ -432,14 +457,14 @@ class DownloadManager implements IDownloadManager {
       if (!resolvedPlaylist.isVod) {
         episode.status = DownloadStatus.failed;
         episode.errorMessage = '不支持下载直播流 (无有效分片)';
-        _notifyProgress(task.recordKey, task.episodeNumber, episode);
+        _notifyProgress(task, episode);
         return;
       }
 
       if (resolvedPlaylist.segments.isEmpty) {
         episode.status = DownloadStatus.failed;
         episode.errorMessage = 'M3U8 中未找到可下载的分片';
-        _notifyProgress(task.recordKey, task.episodeNumber, episode);
+        _notifyProgress(task, episode);
         return;
       }
 
@@ -448,12 +473,6 @@ class DownloadManager implements IDownloadManager {
         segments = M3u8AdFilter.filterAds(segments);
       }
 
-      final base = await _downloadBaseDir;
-      final episodeDir =
-          getEpisodeDir(base, bangumiId, pluginName, task.episodeNumber);
-      await Directory(episodeDir).create(recursive: true);
-      episode.downloadDirectory = episodeDir;
-      await _checkStorageSpace(base);
       final keys = M3u8Parser.extractUniqueKeys(
         M3u8MediaPlaylist(
           segments: segments,
@@ -464,7 +483,7 @@ class DownloadManager implements IDownloadManager {
       final keyUriToLocal = <String, String>{};
       for (int i = 0; i < keys.length; i++) {
         final keyFile = 'key_$i.key';
-        final keyPath = '$episodeDir/$keyFile';
+        final keyPath = path.join(episodeDir, keyFile);
         await _downloadFile(
             keys[i].uri, keyPath, httpHeaders, task.cancelToken);
         keyUriToLocal[keys[i].uri] = keyFile;
@@ -472,7 +491,7 @@ class DownloadManager implements IDownloadManager {
 
       episode.totalSegments = segments.length;
       episode.downloadedSegments = 0;
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
       final episodeDirObj = Directory(episodeDir);
       if (await episodeDirObj.exists()) {
         await for (final entity in episodeDirObj.list()) {
@@ -487,8 +506,8 @@ class DownloadManager implements IDownloadManager {
       final existingSegments = <int>{};
       var existingBytes = 0;
       for (int i = 0; i < segments.length; i++) {
-        final segFile =
-            File('$episodeDir/seg_${i.toString().padLeft(5, '0')}.ts');
+        final segFile = File(
+            path.join(episodeDir, 'seg_${i.toString().padLeft(5, '0')}.ts'));
         if (await segFile.exists()) {
           final segmentBytes = await segFile.length();
           if (segmentBytes <= 0) continue;
@@ -501,7 +520,7 @@ class DownloadManager implements IDownloadManager {
       episode.progressPercent = episode.totalSegments > 0
           ? episode.downloadedSegments / episode.totalSegments
           : 0.0;
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
 
       final pendingIndices = <int>[];
       for (int i = 0; i < segments.length; i++) {
@@ -531,7 +550,7 @@ class DownloadManager implements IDownloadManager {
 
           _downloadSegmentWithRetry(
             segments[idx].uri,
-            '$episodeDir/seg_${idx.toString().padLeft(5, '0')}.ts',
+            path.join(episodeDir, 'seg_${idx.toString().padLeft(5, '0')}.ts'),
             httpHeaders,
             task.cancelToken,
           ).then((bytes) {
@@ -541,7 +560,7 @@ class DownloadManager implements IDownloadManager {
             episode.progressPercent =
                 episode.downloadedSegments / episode.totalSegments;
             _speedTrackers[key]?.update(sessionBytes);
-            _notifyProgress(task.recordKey, task.episodeNumber, episode);
+            _notifyProgress(task, episode);
             completedCount++;
             semaphore.release();
             if (completedCount + failedCount == pendingIndices.length) {
@@ -567,14 +586,14 @@ class DownloadManager implements IDownloadManager {
         if (task.isPaused) {
           episode.status = DownloadStatus.paused;
         }
-        _notifyProgress(task.recordKey, task.episodeNumber, episode);
+        _notifyProgress(task, episode);
         return;
       }
 
       if (failedCount > 0) {
         episode.status = DownloadStatus.failed;
         episode.errorMessage = '$failedCount 个分片下载失败';
-        _notifyProgress(task.recordKey, task.episodeNumber, episode);
+        _notifyProgress(task, episode);
         return;
       }
 
@@ -586,7 +605,7 @@ class DownloadManager implements IDownloadManager {
         targetDuration: targetDuration,
         keyUriToLocal: keyUriToLocal,
       );
-      final m3u8Path = '$episodeDir/playlist.m3u8';
+      final m3u8Path = path.join(episodeDir, 'playlist.m3u8');
       await File(m3u8Path).writeAsString(localM3u8);
       final finalVideoBytes = await calculateM3u8VideoBytes(episodeDir);
 
@@ -596,7 +615,7 @@ class DownloadManager implements IDownloadManager {
       episode.completedAt = DateTime.now();
       episode.totalBytes =
           finalVideoBytes > 0 ? finalVideoBytes : existingBytes + sessionBytes;
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
 
       KazumiLogger().i(
         'DownloadManager: episode ${task.episodeNumber} completed. '
@@ -606,12 +625,12 @@ class DownloadManager implements IDownloadManager {
       episode.status = DownloadStatus.failed;
       episode.errorMessage =
           '存储空间不足 (可用: ${fmt.formatBytes(e.availableBytes)})';
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
       KazumiLogger().w('DownloadManager: insufficient storage space', error: e);
     } on FileSystemException catch (e) {
       episode.status = DownloadStatus.failed;
       episode.errorMessage = _getStorageErrorMessage(e);
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
       KazumiLogger().e('DownloadManager: file system error', error: e);
     } on NetworkException catch (e) {
       if (e.type == NetworkExceptionType.cancel) {
@@ -622,14 +641,14 @@ class DownloadManager implements IDownloadManager {
         episode.status = DownloadStatus.failed;
         episode.errorMessage = e.message;
       }
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
     } catch (e) {
       episode.status = DownloadStatus.failed;
       episode.errorMessage = e.toString();
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
       KazumiLogger().e('DownloadManager: episode download failed', error: e);
     } finally {
-      _onTaskComplete(key);
+      _onTaskComplete(task);
     }
   }
 
@@ -643,14 +662,10 @@ class DownloadManager implements IDownloadManager {
   }) async {
     final key = _taskKey(task.recordKey, task.episodeNumber);
     try {
-      final base = await _downloadBaseDir;
-      final episodeDir =
-          getEpisodeDir(base, bangumiId, pluginName, task.episodeNumber);
-      await Directory(episodeDir).create(recursive: true);
-      episode.downloadDirectory = episodeDir;
-      await _checkStorageSpace(base);
+      final episodeDir = await _prepareEpisodeDir(
+          episode, bangumiId, pluginName, task.episodeNumber);
 
-      final filePath = '$episodeDir/video.mp4';
+      final filePath = path.join(episodeDir, 'video.mp4');
       final tmpPath = '$filePath.tmp';
 
       int existingBytes = 0;
@@ -661,7 +676,7 @@ class DownloadManager implements IDownloadManager {
 
       episode.totalSegments = 1;
       episode.downloadedSegments = 0;
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
 
       final requestHeaders = Map<String, String>.from(httpHeaders);
       bool useRange = existingBytes > 0;
@@ -723,7 +738,7 @@ class DownloadManager implements IDownloadManager {
           episode.progressPercent = totalSize > 0 ? received / totalSize : 0;
           // Update speed tracker
           _speedTrackers[key]?.update(received);
-          _notifyProgress(task.recordKey, task.episodeNumber, episode);
+          _notifyProgress(task, episode);
         }
       } finally {
         await raf.close();
@@ -733,7 +748,7 @@ class DownloadManager implements IDownloadManager {
         if (task.isPaused) {
           episode.status = DownloadStatus.paused;
         }
-        _notifyProgress(task.recordKey, task.episodeNumber, episode);
+        _notifyProgress(task, episode);
         return;
       }
 
@@ -745,7 +760,7 @@ class DownloadManager implements IDownloadManager {
       episode.progressPercent = 1.0;
       episode.completedAt = DateTime.now();
       episode.totalBytes = await File(filePath).length();
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
 
       KazumiLogger().i(
         'DownloadManager: episode ${task.episodeNumber} completed (direct download). '
@@ -755,12 +770,12 @@ class DownloadManager implements IDownloadManager {
       episode.status = DownloadStatus.failed;
       episode.errorMessage =
           '存储空间不足 (可用: ${fmt.formatBytes(e.availableBytes)})';
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
       KazumiLogger().w('DownloadManager: insufficient storage space', error: e);
     } on FileSystemException catch (e) {
       episode.status = DownloadStatus.failed;
       episode.errorMessage = _getStorageErrorMessage(e);
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
       KazumiLogger().e('DownloadManager: file system error', error: e);
     } on NetworkException catch (e) {
       if (e.type == NetworkExceptionType.cancel) {
@@ -771,28 +786,33 @@ class DownloadManager implements IDownloadManager {
         episode.status = DownloadStatus.failed;
         episode.errorMessage = e.message;
       }
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
     } catch (e) {
       episode.status = DownloadStatus.failed;
       episode.errorMessage = e.toString();
-      _notifyProgress(task.recordKey, task.episodeNumber, episode);
+      _notifyProgress(task, episode);
       KazumiLogger()
           .e('DownloadManager: direct file download failed', error: e);
     }
   }
 
-  void _onTaskComplete(String key) {
-    _activeTasks.remove(key);
-    _speedTrackers.remove(key);
+  void _onTaskComplete(DownloadTask task) {
+    final key = _taskKey(task.recordKey, task.episodeNumber);
+    // A retry may already own this key while the cancelled task is unwinding.
+    if (_activeTasks[key] == null || identical(_activeTasks[key], task)) {
+      _activeTasks.remove(key);
+      _speedTrackers.remove(key);
+    }
     _runningCount--;
     _processQueue();
   }
 
-  void _notifyProgress(
-      String recordKey, int episodeNumber, DownloadEpisode episode) {
-    final key = _taskKey(recordKey, episodeNumber);
+  void _notifyProgress(DownloadTask task, DownloadEpisode episode) {
+    final key = _taskKey(task.recordKey, task.episodeNumber);
+    // Cancelled or superseded tasks no longer own the episode.
+    if (!identical(_activeTasks[key], task)) return;
     final speed = _speedTrackers[key]?.currentSpeed ?? 0.0;
-    onProgress?.call(recordKey, episodeNumber, episode, speed);
+    onProgress?.call(task.recordKey, task.episodeNumber, episode, speed);
   }
 
   Future<String> _fetchM3u8(
@@ -883,21 +903,46 @@ class DownloadManager implements IDownloadManager {
 
   @override
   Future<void> deleteEpisodeFiles(
-      int bangumiId, String pluginName, int episodeNumber) async {
-    final base = await _downloadBaseDir;
-    final dir =
-        Directory(getEpisodeDir(base, bangumiId, pluginName, episodeNumber));
+      int bangumiId, String pluginName, int episodeNumber,
+      {DownloadEpisode? episode}) async {
+    final dir = Directory(await _episodeDirForDeletion(
+        episode, bangumiId, pluginName, episodeNumber));
     if (await dir.exists()) {
       await dir.delete(recursive: true);
     }
   }
 
   @override
-  Future<void> deleteRecordFiles(int bangumiId, String pluginName) async {
-    final base = await _downloadBaseDir;
-    final dir = Directory('$base/${bangumiId}_$pluginName');
-    if (await dir.exists()) {
-      await dir.delete(recursive: true);
+  Future<void> deleteRecordFiles(int bangumiId, String pluginName,
+      {DownloadRecord? record}) async {
+    if (record == null) {
+      final dir = Directory(path.join(
+          await getDefaultDownloadDirectory(), '${bangumiId}_$pluginName'));
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+      return;
+    }
+
+    // Episodes may live under different base directories, so delete each
+    // episode directory individually.
+    final parentDirs = <String>{};
+    for (final entry in record.episodes.entries) {
+      final episodeDir = await _episodeDirForDeletion(
+          entry.value, bangumiId, pluginName, entry.key);
+      final dir = Directory(episodeDir);
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+      parentDirs.add(path.dirname(episodeDir));
+    }
+
+    for (final parentDir in parentDirs) {
+      try {
+        await Directory(parentDir).delete();
+      } on FileSystemException {
+        // Parent is missing or still holds other files; leave it.
+      }
     }
   }
 

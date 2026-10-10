@@ -9,10 +9,11 @@ import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/modules/history/history_module.dart';
 import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/video/local_video_launcher.dart';
-import 'package:kazumi/pages/video/video_controller.dart';
+import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/video/local_cover_service.dart';
 import 'package:kazumi/utils/constants.dart';
+import 'package:kazumi/utils/local_video_utils.dart';
 
 /// [my修改] 本地视频库：看过一次的文件夹生成一张卡片, 点击直接从上次位置续播。
 /// 支持用户自管理分类 (添加/重命名/删除/排序), 顶部标签行筛选, 样式与追番页一致。
@@ -25,9 +26,8 @@ class LocalVideoPage extends StatefulWidget {
 
 class _LocalVideoPageState extends State<LocalVideoPage>
     with SingleTickerProviderStateMixin {
-  final HistoryController _historyController = Modular.get<HistoryController>();
-  final VideoPageController _videoPageController =
-      Modular.get<VideoPageController>();
+  // [my修改] modular 7：inject 全局获取；播放上下文经路由参数传递，不再持有共享控制器
+  final HistoryController _historyController = inject<HistoryController>();
 
   List<History> _entries = [];
   // [my修改] 封面缓存: 文件夹合成 id → 封面文件路径 (null=无封面/未生成)
@@ -193,12 +193,16 @@ class _LocalVideoPageState extends State<LocalVideoPage>
       startEpisode = history.lastWatchEpisode.clamp(1, files.length).toInt();
     }
 
-    _videoPageController.initForLocalFilePlayback(
-      bangumiItem: history.bangumiItem,
-      filePaths: files,
-      startEpisode: startEpisode,
+    // [my修改] modular 7 参数对象模式：播放上下文经路由交给 VideoPage 自建控制器
+    if (!mounted) return;
+    context.pushNamed(
+      '/video/',
+      arguments: LocalVideoPlaybackArgs(
+        bangumiItem: history.bangumiItem,
+        filePaths: files,
+        startEpisode: startEpisode,
+      ),
     );
-    await Modular.to.pushNamed('/video/');
     _reload();
   }
 
@@ -232,7 +236,7 @@ class _LocalVideoPageState extends State<LocalVideoPage>
   }
 
   Future<void> _addVideo() async {
-    await showLocalVideoAddDialog();
+    await showLocalVideoAddDialog(context);
     _reload();
   }
 
@@ -538,27 +542,25 @@ class _LocalVideoPageState extends State<LocalVideoPage>
       const Tab(text: '全部'),
       for (final category in _categories) Tab(text: category),
     ];
+    // [my修改] 2.3.8 的 SysAppBar 无 bottom 参数, 分类 TabBar 移入 body 顶部
+    final Widget? categoryTabBar = _tabController == null
+        ? null
+        : TabBar(
+            controller: _tabController,
+            tabs: tabs,
+            indicatorColor: colorScheme.primary,
+            isScrollable: _categories.length > 4,
+          );
     return Scaffold(
       appBar: SysAppBar(
         needTopOffset: false,
         toolbarHeight: 104,
         title: const Text('本地视频'),
-        bottom: _tabController == null
-            ? const PreferredSize(
-                preferredSize: Size.fromHeight(48),
-                child: SizedBox(height: 48),
-              )
-            : TabBar(
-                controller: _tabController,
-                tabs: tabs,
-                indicatorColor: colorScheme.primary,
-                isScrollable: _categories.length > 4,
-              ),
         actions: [
           IconButton(
             tooltip: '添加视频',
             onPressed: () async {
-              await showLocalVideoAddDialog();
+              await showLocalVideoAddDialog(context);
               _reload();
             },
             icon: const Icon(Icons.add),
@@ -575,7 +577,12 @@ class _LocalVideoPageState extends State<LocalVideoPage>
           ),
         ],
       ),
-      body: _entries.isEmpty
+      body: Column(
+        children: [
+          if (categoryTabBar != null)
+            SizedBox(height: 48, child: categoryTabBar),
+          Expanded(
+            child: _entries.isEmpty
           ? Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -656,6 +663,9 @@ class _LocalVideoPageState extends State<LocalVideoPage>
               ],
             ),
           ),
+          ),
+        ],
+      ),
     );
   }
 }

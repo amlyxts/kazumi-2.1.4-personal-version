@@ -1,10 +1,10 @@
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/modules/bangumi/bangumi_interest.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+import 'package:kazumi/modules/bangumi/bangumi_relation.dart';
+import 'package:kazumi/modules/bangumi/bangumi_review.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
-import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/modules/search/plugin_search_module.dart';
-import 'package:kazumi/pages/info/rating_review_dialog.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:mobx/mobx.dart';
 import 'package:kazumi/services/logging/logger.dart';
@@ -17,7 +17,9 @@ part 'info_controller.g.dart';
 class InfoController = _InfoController with _$InfoController;
 
 abstract class _InfoController with Store {
-  final CollectController collectController = Modular.get<CollectController>();
+  _InfoController(this.collectController);
+
+  final CollectController collectController;
   late BangumiItem bangumiItem;
 
   @observable
@@ -27,7 +29,7 @@ abstract class _InfoController with Store {
   var pluginSearchResponseList = ObservableList<PluginSearchResponse>();
 
   @observable
-  var pluginSearchStatus = ObservableMap<String, String>();
+  var pluginSearchStatus = ObservableMap<String, PluginSearchStatus>();
 
   @observable
   var commentsList = ObservableList<CommentItem>();
@@ -37,6 +39,20 @@ abstract class _InfoController with Store {
 
   @observable
   var staffList = ObservableList<StaffFullItem>();
+
+  @observable
+  var relationList = ObservableList<BangumiRelation>();
+
+  @observable
+  bool relationsIsLoading = false;
+
+  @observable
+  bool relationsQueryTimeout = false;
+
+  @observable
+  bool relationsHasLoaded = false;
+
+  int _relationRequestGeneration = 0;
 
   bool _isFillingInterestUserProfile = false;
 
@@ -203,29 +219,77 @@ abstract class _InfoController with Store {
         .i('InfoController: loaded staff list length ${staffList.length}');
   }
 
-  Future<bool> rateBangumi(RatingReviewResult data,
+  @action
+  void clearRelations() {
+    _relationRequestGeneration++;
+    relationList = ObservableList<BangumiRelation>();
+    relationsIsLoading = false;
+    relationsQueryTimeout = false;
+    relationsHasLoaded = false;
+  }
+
+  bool get canLoadRelations =>
+      !relationsHasLoaded && !relationsIsLoading && !relationsQueryTimeout;
+
+  @action
+  Future<void> queryBangumiRelationsByID(int id) async {
+    if (relationsIsLoading) return;
+
+    final requestGeneration = ++_relationRequestGeneration;
+    relationsIsLoading = true;
+    relationsQueryTimeout = false;
+    relationsHasLoaded = false;
+    try {
+      final relations = await resolveRelatedAnimeChain(
+        currentSubjectId: id,
+        fetchRelations: BangumiApi.getBangumiRelationsByID,
+      );
+      if (!_isCurrentRelationRequest(requestGeneration, id)) {
+        return;
+      }
+      relationList = ObservableList<BangumiRelation>.of(relations);
+      relationsHasLoaded = true;
+      KazumiLogger().i(
+        'InfoController: loaded related anime list length ${relationList.length}',
+      );
+    } catch (_) {
+      if (_isCurrentRelationRequest(requestGeneration, id)) {
+        relationsQueryTimeout = true;
+        rethrow;
+      }
+    } finally {
+      if (_isCurrentRelationRequest(requestGeneration, id)) {
+        relationsIsLoading = false;
+      }
+    }
+  }
+
+  bool _isCurrentRelationRequest(int requestGeneration, int subjectId) =>
+      requestGeneration == _relationRequestGeneration &&
+      bangumiItem.id == subjectId;
+
+  Future<bool> rateBangumi(BangumiReview review,
       {required int localType}) async {
-    final trimmedComment = data.comment.trim();
-    if (await BangumiApi.addOrUpdateBangumiEvaluationBySubjectID(
+    final updated = await BangumiApi.addOrUpdateBangumiEvaluationBySubjectID(
       bangumiItem.id,
       localType,
-      comment: trimmedComment.isNotEmpty ? trimmedComment : null,
-      rate: data.score > 0 ? data.score : 0,
-      tags: data.tags.isNotEmpty ? data.tags : null,
-    )) {
-      bangumiItem.interest = BangumiInterest.mergeLocalSubmission(
-        previous: bangumiItem.interest,
-        rate: data.score,
-        comment: trimmedComment,
-        tags: data.tags,
-      );
-      await collectController.updateLocalCollect(bangumiItem);
-      await fillInterestUserProfileIfNeeded();
-      _removeCurrentUserFromPublicComments();
-      await refreshBangumiCommentsSilently(bangumiItem.id);
-      await refreshBangumiInfoByID(bangumiItem.id);
-      return true;
-    }
-    return false;
+      comment: review.comment,
+      rate: review.score,
+      tags: review.tags,
+    );
+    if (!updated) return false;
+
+    bangumiItem.interest = BangumiInterest.mergeLocalSubmission(
+      previous: bangumiItem.interest,
+      rate: review.score,
+      comment: review.comment,
+      tags: review.tags,
+    );
+    await collectController.updateLocalCollect(bangumiItem);
+    await fillInterestUserProfileIfNeeded();
+    _removeCurrentUserFromPublicComments();
+    await refreshBangumiCommentsSilently(bangumiItem.id);
+    await refreshBangumiInfoByID(bangumiItem.id);
+    return true;
   }
 }

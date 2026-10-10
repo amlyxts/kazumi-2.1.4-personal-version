@@ -8,32 +8,49 @@ import 'package:kazumi/services/player/external_playback_launcher.dart';
 import 'package:kazumi/pages/player/controller/player_danmaku_controller.dart';
 import 'package:kazumi/pages/player/controller/player_debug_controller.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
+import 'package:kazumi/pages/player/controller/player_seek_controller.dart';
 import 'package:kazumi/pages/player/controller/player_aspect_ratio.dart';
 import 'package:kazumi/pages/player/controller/player_panel_controller.dart';
 import 'package:kazumi/pages/player/controller/player_playback_controller.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
+import 'package:kazumi/pages/player/controller/player_screenshot_controller.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
+import 'package:kazumi/pages/download/download_controller.dart';
+import 'package:kazumi/services/player/audio_controller.dart';
+import 'package:kazumi/utils/async_session.dart';
 import 'package:kazumi/utils/device.dart';
 
 export 'package:kazumi/pages/player/controller/player_models.dart';
 
-class PlayerController {
-  final ShaderAssetService shaderAssetService =
-      Modular.get<ShaderAssetService>();
+class PlayerController implements Disposable {
+  PlayerController(
+    this.shaderAssetService,
+    DownloadController downloadController,
+    this.audioController,
+  ) {
+    danmaku = PlayerDanmakuController(
+      isLocalPlayback: () => isLocalPlayback,
+      downloadController: downloadController,
+    );
+  }
+
+  final ShaderAssetService shaderAssetService;
+  final AudioController audioController;
+  final AsyncSessionOwner _initializations = AsyncSessionOwner();
+  Future<void>? _shutdownFuture;
   final PlayerPanelController panel = PlayerPanelController();
+  final PlayerScreenshotController screenshots = PlayerScreenshotController();
   final PlayerDebugController debug = PlayerDebugController();
 
-  late final PlayerDanmakuController danmaku = PlayerDanmakuController(
-    isLocalPlayback: () => isLocalPlayback,
-  );
+  late final PlayerDanmakuController danmaku;
   late final PlayerPlaybackController playback = PlayerPlaybackController(
     shaderAssetService: shaderAssetService,
     debug: debug,
     videoUrl: () => videoUrl,
-    onExitSyncPlayRoom: () => syncplay.exitRoom(),
+    isLocalPlayback: () => isLocalPlayback,
   );
   late final PlayerSyncPlayController syncplay = PlayerSyncPlayController(
     bangumiId: () => bangumiId,
@@ -46,6 +63,13 @@ class PlayerController {
     pause: pause,
     play: play,
     seek: seek,
+  );
+  late final PlayerSeekController seeking = PlayerSeekController(
+    playback: playback,
+    danmaku: danmaku,
+    pause: pause,
+    play: play,
+    onSeekCompleted: _onSeekCompleted,
   );
   late final ExternalPlaybackLauncher externalPlayback =
       ExternalPlaybackLauncher(
@@ -136,11 +160,15 @@ class PlayerController {
     if (stored.round() == clamped.round()) {
       return;
     }
-    unawaited(
-        GStorage.putSetting<double>(SettingsKeys.defaultVolume, clamped));
+    unawaited(GStorage.putSetting<double>(SettingsKeys.defaultVolume, clamped));
   }
 
   Future<bool> init(PlaybackInitParams params) async {
+    if (_initializations.isClosed) {
+      return false;
+    }
+    final initialization = _initializations.begin();
+
     videoUrl = params.videoUrl;
     isLocalPlayback = params.isLocalPlayback;
     bangumiId = params.bangumiId;
@@ -163,25 +191,31 @@ class PlayerController {
     playback.arrowKeySkipTime =
         GStorage.getSetting(SettingsKeys.arrowKeySkipTime);
     try {
-      await dispose(
-        disposeSyncPlayController: false,
-      );
+      await _releasePlaybackResources();
     } catch (_) {}
+    if (initialization.isStale) {
+      return false;
+    }
+
     final Player? player;
     try {
       player = await playback.createVideoController(
         params.httpHeaders,
         params.adBlockerEnabled,
+        canInstall: () => initialization.isActive,
         offset: params.offset,
-        isLocalPlayback: params.isLocalPlayback,
+        videoSourceFormat: params.videoSourceFormat,
       );
     } catch (e) {
+      if (initialization.isStale) {
+        return false;
+      }
       playback.loading = false;
       KazumiLogger()
           .e('PlayerController: failed to initialize video', error: e);
       return false;
     }
-    if (player == null || !playback.isCurrentPlayer(player)) {
+    if (player == null || !_ownsInitialization(initialization, player)) {
       return false;
     }
 
@@ -194,25 +228,25 @@ class PlayerController {
         playback.volume = muted ? 0 : remembered;
       }
       await setVolume(playback.volume);
-      if (!playback.isCurrentPlayer(player)) {
+      if (!_ownsInitialization(initialization, player)) {
         return false;
       }
     } else {
       await FlutterVolumeController.getVolume().then((value) {
         playback.volume = (value ?? 0.0) * 100;
       });
-      if (!playback.isCurrentPlayer(player)) {
+      if (!_ownsInitialization(initialization, player)) {
         return false;
       }
 
       await FlutterVolumeController.updateShowSystemUI(false);
-      if (!playback.isCurrentPlayer(player)) {
+      if (!_ownsInitialization(initialization, player)) {
         await FlutterVolumeController.updateShowSystemUI(true);
         return false;
       }
 
       FlutterVolumeController.addListener((volume) {
-        if (player == null || !playback.isCurrentPlayer(player)) {
+        if (player == null || !_ownsInitialization(initialization, player)) {
           return;
         }
         if (panel.volumeSeeking) {
@@ -228,12 +262,12 @@ class PlayerController {
           });
         }
       }, category: AudioSessionCategory.playback, emitOnStart: false);
-      if (!playback.isCurrentPlayer(player)) {
+      if (!_ownsInitialization(initialization, player)) {
         return false;
       }
     }
-    setPlaybackSpeed(playback.playerSpeed);
-    if (!playback.isCurrentPlayer(player)) {
+    await setPlaybackSpeed(playback.playerSpeed);
+    if (!_ownsInitialization(initialization, player)) {
       return false;
     }
     KazumiLogger().i('PlayerController: video initialized');
@@ -251,6 +285,10 @@ class PlayerController {
     return true;
   }
 
+  bool _ownsInitialization(AsyncSession initialization, Player player) {
+    return initialization.isActive && playback.isCurrentPlayer(player);
+  }
+
   Future<void> setShader(SuperResolutionMode mode, {Player? player}) async {
     await playback.setShader(
       mode,
@@ -260,10 +298,8 @@ class PlayerController {
 
   Future<void> setPlaybackSpeed(double playerSpeed) async {
     await playback.setPlaybackSpeed(playerSpeed);
-
-    // [my修改] 记忆倍速：只要倍速变了，就立刻存入本地设置
-    await GStorage.putSetting(SettingsKeys.defaultPlaySpeed, playerSpeed);
-
+    // [my修改] 跨会话记忆：手动变速即写入默认倍速，下次播放沿用
+    GStorage.putSetting(SettingsKeys.defaultPlaySpeed, playerSpeed);
     try {
       updateDanmakuSpeed();
     } catch (_) {}
@@ -287,17 +323,14 @@ class PlayerController {
     await playback.playOrPause(pause: pause, play: play);
   }
 
-  Future<void> seek(Duration duration, {bool enableSync = true}) async {
-    final player = playback.mediaPlayer;
-    if (player == null) return;
-    playback.currentPosition = duration;
-    danmaku.canvasController.clear();
-    try {
-      await player.seek(duration);
-    } catch (_) {
-      return;
-    }
-    if (syncplay.syncplayController != null) {
+  Future<void> seek(Duration duration, {bool enableSync = true}) =>
+      seeking.seekTo(duration, enableSync: enableSync);
+
+  Future<void> seekBy(Duration offset, {bool enableSync = true}) =>
+      seeking.seekBy(offset, enableSync: enableSync);
+
+  Future<void> _onSeekCompleted(bool enableSync) async {
+    if (syncplay.hasSession) {
       setSyncPlayCurrentPosition();
       if (enableSync) {
         await requestSyncPlaySync(doSeek: true);
@@ -315,7 +348,7 @@ class PlayerController {
       return;
     }
     playback.playing = false;
-    if (syncplay.syncplayController != null) {
+    if (syncplay.hasSession) {
       setSyncPlayCurrentPosition();
       if (enableSync) {
         await requestSyncPlaySync();
@@ -333,7 +366,7 @@ class PlayerController {
       return;
     }
     playback.playing = true;
-    if (syncplay.syncplayController != null) {
+    if (syncplay.hasSession) {
       setSyncPlayCurrentPosition();
       if (enableSync) {
         await requestSyncPlaySync();
@@ -341,29 +374,71 @@ class PlayerController {
     }
   }
 
-  Future<void> dispose({
-    bool disposeSyncPlayController = true,
-  }) async {
-    hideVolumeUITimer?.cancel();
-    _volumeGestureSyncTimer?.cancel();
-    FlutterVolumeController.removeListener();
-    await FlutterVolumeController.updateShowSystemUI(true);
-    await playback.dispose(
-      disposeSyncPlayController: disposeSyncPlayController,
+  @override
+  void dispose() {
+    beginShutdown();
+  }
+
+  /// Starts the idempotent player shutdown without blocking route navigation.
+  ///
+  /// Native media and audio-session cleanup may finish after the route is
+  /// removed. Immediate ownership detachment happens synchronously before this
+  /// method returns.
+  void beginShutdown() {
+    _initializations.close();
+    if (_shutdownFuture != null) {
+      return;
+    }
+    screenshots.dispose();
+    final shutdown = _shutdownResources();
+    _shutdownFuture = shutdown;
+    unawaited(
+      shutdown.catchError((Object error, StackTrace stackTrace) {
+        KazumiLogger().e(
+          'PlayerController: failed to dispose asynchronously',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }),
     );
   }
 
+  Future<void> _shutdownResources() async {
+    await Future.wait([
+      _releasePlaybackResources(),
+      syncplay.dispose(),
+    ]);
+  }
+
+  Future<void> _releasePlaybackResources() async {
+    hideVolumeUITimer?.cancel();
+    _volumeGestureSyncTimer?.cancel();
+    FlutterVolumeController.removeListener();
+    await Future.wait([
+      audioController.deactivate(),
+      playback.stop(),
+      _restoreSystemVolumeUi(),
+    ]);
+  }
+
+  Future<void> _restoreSystemVolumeUi() async {
+    try {
+      await FlutterVolumeController.updateShowSystemUI(true);
+    } catch (error, stackTrace) {
+      KazumiLogger().w(
+        'PlayerController: failed to restore the system volume UI',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
   Future<void> stop() async {
-    await playback.stop();
+    _initializations.cancel();
+    await _releasePlaybackResources();
   }
 
-  Future<Uint8List?> screenshot({String format = 'image/jpeg'}) async {
-    return await playback.screenshot(format: format);
-  }
-
-  Future<Uint8List?> screenshotPng() async {
-    return await playback.screenshotPng();
-  }
+  Future<Uint8List?> screenshotPng() => playback.screenshotPng();
 
   void setButtonForwardTime(int time) {
     playback.buttonSkipTime = time;
@@ -383,13 +458,11 @@ class PlayerController {
       String room,
       String username,
       Future<void> Function(int episode, {int currentRoad, int offset})
-          changeEpisode,
-      {bool enableTLS = true}) async {
+          changeEpisode) async {
     await syncplay.createRoom(
       room,
       username,
       changeEpisode,
-      enableTLS: enableTLS,
     );
   }
 

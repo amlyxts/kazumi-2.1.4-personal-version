@@ -8,6 +8,7 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/utils/async_session.dart';
 import 'package:mobx/mobx.dart';
 
 part 'player_syncplay_controller.g.dart';
@@ -40,11 +41,18 @@ abstract class _PlayerSyncPlayController with Store {
   final Future<void> Function({bool enableSync}) play;
   final Future<void> Function(Duration duration, {bool enableSync}) seek;
 
+  /// Set before the socket opens and cleared on teardown, so unlike
+  /// [syncplayRoom] it also covers the window where the connection is still
+  /// being established.
+  @observable
   SyncplayClient? syncplayController;
+  final AsyncSessionOwner _connectionSessions = AsyncSessionOwner();
   @observable
   String syncplayRoom = '';
   @observable
   int syncplayClientRtt = 0;
+
+  bool get hasSession => syncplayController != null;
 
   final StreamController<SyncPlayChatMessage> _chatStreamController =
       StreamController<SyncPlayChatMessage>.broadcast();
@@ -70,44 +78,53 @@ abstract class _PlayerSyncPlayController with Store {
       String room,
       String username,
       Future<void> Function(int episode, {int currentRoad, int offset})
-          changeEpisode,
-      {bool enableTLS = true}) async {
-    await syncplayController?.disconnect();
+          changeEpisode) async {
+    if (_connectionSessions.isClosed) {
+      return;
+    }
+    final session = _connectionSessions.begin();
+    final previousClient = syncplayController;
+    syncplayController = null;
+    syncplayRoom = '';
+    syncplayClientRtt = 0;
+    await previousClient?.disconnect();
+    if (session.isStale) {
+      return;
+    }
     final String syncPlayEndPoint =
         GStorage.getSetting(SettingsKeys.syncPlayEndPoint);
-    String syncPlayEndPointHost = '';
-    int syncPlayEndPointPort = 0;
     KazumiLogger().i('SyncPlay: connecting to $syncPlayEndPoint');
-    try {
-      final parsed = parseSyncPlayEndPoint(syncPlayEndPoint);
-      if (parsed != null) {
-        syncPlayEndPointHost = parsed.host;
-        syncPlayEndPointPort = parsed.port;
-      }
-    } catch (_) {}
-    if (syncPlayEndPointHost == '' || syncPlayEndPointPort == 0) {
+    final parsed = parseSyncPlayEndPoint(syncPlayEndPoint);
+    if (parsed == null) {
       KazumiDialog.showToast(
         message: 'SyncPlay: 服务器地址不合法 $syncPlayEndPoint',
       );
       KazumiLogger().e('SyncPlay: invalid server address $syncPlayEndPoint');
       return;
     }
-    syncplayController =
-        SyncplayClient(host: syncPlayEndPointHost, port: syncPlayEndPointPort);
+    final enableTLS = isOfficialSyncPlayEndPoint(parsed);
+    final client = SyncplayClient(host: parsed.host, port: parsed.port);
+    syncplayController = client;
     try {
-      await syncplayController!.connect(enableTLS: enableTLS);
-      KazumiLogger().i(
-          'SyncPlay: connected to $syncPlayEndPointHost:$syncPlayEndPointPort');
-      syncplayController!.onGeneralMessage.listen(
-        (message) {
-          // print('SyncPlay: general message: ${message.toString()}');
-        },
+      await client.connect(enableTLS: enableTLS);
+      if (!_isCurrentConnection(session, client)) {
+        await client.disconnect();
+        return;
+      }
+      KazumiLogger().i('SyncPlay: connected to ${parsed.host}:${parsed.port}');
+      client.onGeneralMessage.listen(
+        null,
         onError: (error) {
-          KazumiLogger().e('SyncPlay: error ${error.message}', error: error);
+          if (!_isCurrentConnection(session, client)) {
+            return;
+          }
+          final message =
+              error is SyncplayException ? error.message : error.toString();
+          KazumiLogger().e('SyncPlay: error $message', error: error);
           if (error is SyncplayConnectionException) {
             exitRoom();
             KazumiDialog.showToast(
-              message: 'SyncPlay: 同步中断 ${error.message}',
+              message: 'SyncPlay: 同步中断 $message',
               duration: const Duration(seconds: 5),
               showActionButton: true,
               actionLabel: '重新连接',
@@ -116,8 +133,11 @@ abstract class _PlayerSyncPlayController with Store {
           }
         },
       );
-      syncplayController!.onRoomMessage.listen(
+      client.onRoomMessage.listen(
         (message) {
+          if (!_isCurrentConnection(session, client)) {
+            return;
+          }
           if (message['type'] == 'init') {
             if (message['username'] == '') {
               KazumiDialog.showToast(
@@ -142,8 +162,11 @@ abstract class _PlayerSyncPlayController with Store {
           }
         },
       );
-      syncplayController!.onFileChangedMessage.listen(
+      client.onFileChangedMessage.listen(
         (message) {
+          if (!_isCurrentConnection(session, client)) {
+            return;
+          }
           KazumiLogger().i(
               'SyncPlay: file changed by ${message['setBy']}: ${message['name']}');
           RegExp regExp = RegExp(r'(\d+)\[(\d+)\]');
@@ -161,8 +184,11 @@ abstract class _PlayerSyncPlayController with Store {
           }
         },
       );
-      syncplayController!.onChatMessage.listen(
+      client.onChatMessage.listen(
         (message) {
+          if (!_isCurrentConnection(session, client)) {
+            return;
+          }
           final String sender = (message['username'] ?? '').toString();
           final String text = (message['message'] ?? '').toString();
           final bool fromRemote = message['username'] != username;
@@ -174,11 +200,19 @@ abstract class _PlayerSyncPlayController with Store {
           );
         },
         onError: (error) {
-          KazumiLogger().e('SyncPlay: error ${error.message}', error: error);
+          if (!_isCurrentConnection(session, client)) {
+            return;
+          }
+          final message =
+              error is SyncplayException ? error.message : error.toString();
+          KazumiLogger().e('SyncPlay: error $message', error: error);
         },
       );
-      syncplayController!.onPositionChangedMessage.listen(
+      client.onPositionChangedMessage.listen(
         (message) {
+          if (!_isCurrentConnection(session, client)) {
+            return;
+          }
           syncplayClientRtt = (message['clientRtt'].toDouble() * 1000).toInt();
           KazumiLogger().i(
               'SyncPlay: position changed by ${message['setBy']}: [${DateTime.now().millisecondsSinceEpoch / 1000.0}] calculatedPosition ${message['calculatedPositon']} position: ${message['position']} doSeek: ${message['doSeek']} paused: ${message['paused']} clientRtt: ${message['clientRtt']} serverRtt: ${message['serverRtt']} fd: ${message['fd']}');
@@ -215,11 +249,32 @@ abstract class _PlayerSyncPlayController with Store {
           }
         },
       );
-      await syncplayController!.joinRoom(room, username);
+      await client.joinRoom(room, username);
+      if (!_isCurrentConnection(session, client)) {
+        await client.disconnect();
+        return;
+      }
       syncplayRoom = room;
     } catch (e) {
       KazumiLogger().e('SyncPlay: error', error: e);
+      if (!_isCurrentConnection(session, client)) {
+        await client.disconnect();
+        return;
+      }
+      syncplayController = null;
+      syncplayRoom = '';
+      syncplayClientRtt = 0;
+      await client.disconnect();
+      final message = e is SyncplayException ? e.message : e.toString();
+      KazumiDialog.showToast(
+        message: 'SyncPlay: 连接失败 $message',
+        duration: const Duration(seconds: 5),
+      );
     }
+  }
+
+  bool _isCurrentConnection(AsyncSession session, SyncplayClient client) {
+    return session.isActive && identical(syncplayController, client);
   }
 
   void setCurrentPosition({bool? forceSyncPlaying, double? forceSyncPosition}) {
@@ -238,27 +293,51 @@ abstract class _PlayerSyncPlayController with Store {
 
   Future<void> setPlayingBangumi(
       {bool? forceSyncPlaying, double? forceSyncPosition}) async {
-    await syncplayController!.setSyncPlayPlaying(
-        "${bangumiId()}[${currentEpisode()}]", 10800, 220514438);
-    setCurrentPosition(
-        forceSyncPlaying: forceSyncPlaying,
-        forceSyncPosition: forceSyncPosition);
-    await requestSync(doSeek: null);
+    final client = syncplayController;
+    if (client == null) {
+      return;
+    }
+    await _runBestEffortSync(() async {
+      await client.setSyncPlayPlaying(
+          "${bangumiId()}[${currentEpisode()}]", 10800, 220514438);
+      if (!identical(syncplayController, client)) {
+        return;
+      }
+      setCurrentPosition(
+          forceSyncPlaying: forceSyncPlaying,
+          forceSyncPosition: forceSyncPosition);
+      await client.sendSyncPlaySyncRequest(doSeek: null);
+    });
   }
 
   Future<void> requestSync({bool? doSeek}) async {
-    await syncplayController!.sendSyncPlaySyncRequest(doSeek: doSeek);
+    final client = syncplayController;
+    if (client == null) {
+      return;
+    }
+    await _runBestEffortSync(
+        () => client.sendSyncPlaySyncRequest(doSeek: doSeek));
   }
 
   Future<void> sendChatMessage(String message) async {
-    if (syncplayController == null) {
+    final client = syncplayController;
+    if (client == null) {
       return;
     }
-    await syncplayController!.sendChatMessage(message);
+    await _runBestEffortSync(() => client.sendChatMessage(message));
+  }
+
+  Future<void> _runBestEffortSync(Future<void> Function() operation) async {
+    try {
+      await operation();
+    } on SyncplayConnectionException {
+      // Socket handlers report active connection failures.
+    }
   }
 
   @action
   Future<void> exitRoom() async {
+    _connectionSessions.cancel();
     final controller = syncplayController;
     syncplayController = null;
     syncplayRoom = '';
@@ -270,6 +349,7 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   Future<void> dispose() async {
+    _connectionSessions.close();
     await exitRoom();
     await _chatStreamController.close();
   }

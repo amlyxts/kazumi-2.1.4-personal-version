@@ -1,4 +1,3 @@
-import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/history/history_module.dart';
 import 'package:kazumi/repositories/history_repository.dart';
@@ -9,7 +8,9 @@ part 'history_controller.g.dart';
 class HistoryController = _HistoryController with _$HistoryController;
 
 abstract class _HistoryController with Store {
-  final _historyRepository = Modular.get<IHistoryRepository>();
+  _HistoryController(this._historyRepository);
+
+  final IHistoryRepository _historyRepository;
 
   @observable
   ObservableList<History> histories = ObservableList<History>();
@@ -21,10 +22,14 @@ abstract class _HistoryController with Store {
   }
 
   Future<void> updateHistory(
-      PlaybackHistoryIdentity identity, Duration progress) async {
+    PlaybackHistoryIdentity identity,
+    Duration progress, {
+    Duration duration = Duration.zero,
+  }) async {
     await _historyRepository.updateHistory(
       identity: identity,
       progress: progress,
+      duration: duration,
     );
     init();
   }
@@ -57,21 +62,6 @@ abstract class _HistoryController with Store {
 
   Future<void> deleteHistory(History history) async {
     await _historyRepository.deleteHistory(history);
-    init();
-  }
-
-  Future<void> clearProgress(
-    BangumiItem bangumiItem,
-    String adapterName,
-    int episode, {
-    String entryKind = HistoryEntryKind.online,
-  }) async {
-    await _historyRepository.clearProgress(
-      bangumiItem,
-      adapterName,
-      episode,
-      entryKind: entryKind,
-    );
     init();
   }
 

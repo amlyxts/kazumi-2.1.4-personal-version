@@ -4,9 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:kazumi/request/config/api_endpoints.dart';
 
-/// [my修改] 本地视频体系仅桌面端可用, iOS/Android 移动端不提供该功能
-final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
-
 class StyleString {
   static const double cardSpace = 8;
   static const double safeSpace = 12;
@@ -17,40 +14,37 @@ class StyleString {
 
 const String customAppFontFamily = "MI_Sans_Regular";
 
-// [本地播放] 本地视频在历史记录中使用的虚拟插件名（adapterName），
-// 非空才能让 canRecord 为 true、进度得以持久化。
-const String localVideoPluginName = 'local';
-
-/// [本地播放] 本地视频支持的视频扩展名与外挂字幕扩展名
-const List<String> localVideoExtensions = [
-  'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'ts', 'm2ts', 'webm', 'm4v', 'rmvb'
-];
-
-const List<String> localSubtitleExtensions = ['srt', 'ass', 'ssa', 'vtt', 'sub'];
-
 /// Opts into the newer Material progress indicator appearance while Flutter
 /// still exposes the compatibility flag.
-/// ignore: deprecated_member_use
 const ProgressIndicatorThemeData progressIndicatorTheme2024 =
+    // ignore: deprecated_member_use
     ProgressIndicatorThemeData(year2023: false);
 
 /// Opts into the newer Material slider appearance while Flutter still exposes
 /// the compatibility flag.
-/// ignore: deprecated_member_use
 const SliderThemeData sliderTheme2024 = SliderThemeData(
+  // ignore: deprecated_member_use
   year2023: false,
   showValueIndicator: ShowValueIndicator.onDrag,
 );
 
-/// Flutter-managed platform transitions. Route-level Modular transitions should
-/// avoid overriding these unless the native page transition is intentionally bypassed.
-const PageTransitionsTheme pageTransitionsTheme2024 = PageTransitionsTheme(
+const _pageTransitionBuilders = <TargetPlatform, PageTransitionsBuilder>{
+  TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+  TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+  TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
+  TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+  TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+};
+
+const PageTransitionsTheme pageTransitionsTheme2024 =
+    PageTransitionsTheme(builders: _pageTransitionBuilders);
+
+// Applied only to the settings navigator; fullscreen routes use the app theme.
+final PageTransitionsTheme settingsPageTransitionsTheme = PageTransitionsTheme(
   builders: {
-    TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-    TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-    TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
-    TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
-    TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+    ..._pageTransitionBuilders,
+    TargetPlatform.linux: const FadeForwardsPageTransitionsBuilder(),
+    TargetPlatform.windows: const FadeForwardsPageTransitionsBuilder(),
   },
 );
 
@@ -84,17 +78,6 @@ const List<String> userAgentsList = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0',
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0',
 ];
-
-/// 默认 SyncPlay 服务器列表
-const List<String> defaultSyncPlayEndPoints = [
-  'syncplay.pl:8995',
-  'syncplay.pl:8996',
-  'syncplay.pl:8997',
-  'syncplay.pl:8998',
-  'syncplay.pl:8999',
-];
-
-const String defaultSyncPlayEndPoint = 'syncplay.pl:8996';
 
 /// 随机HTTP请求头accept-language字段列表
 const List<String> acceptLanguageList = [
@@ -169,19 +152,44 @@ const List<String> mpvAnime4KShadersLite = [
   'Anime4K_Upscale_CNN_x2_S.glsl'
 ];
 
-/// [my修改] 实拍内容超分 (FSRCNNX)：针对真实图像训练，老电视剧适用
-const List<String> mpvFsrcnnxShadersLite = [
-  'FSRCNNX_x2_8_0_4_1.glsl'
+/// FSRCNNX 实拍超分着色器
+const List<String> mpvFSRCNNXShadersLite = ['FSRCNNX_x2_8_0_4_1.glsl'];
+const List<String> mpvFSRCNNXShaders = ['FSRCNNX_x2_16_0_4_1.glsl'];
+
+// [my修改] 本地视频体系仅桌面端可用，iOS/Android 移动端不提供该功能
+final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
+
+// [my修改] 本地视频在历史记录中使用的虚拟插件名（adapterName），
+// 非空才能让 canRecord 为 true、进度得以持久化。
+const String localVideoPluginName = 'local';
+
+/// [my修改] 本地视频支持的视频扩展名与外挂字幕扩展名
+const List<String> localVideoExtensions = [
+  'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'ts', 'm2ts', 'webm', 'm4v', 'rmvb'
 ];
 
-const List<String> mpvFsrcnnxShaders = [
-  'FSRCNNX_x2_16_0_4_1.glsl'
-];
+const List<String> localSubtitleExtensions = ['srt', 'ass', 'ssa', 'vtt', 'sub'];
 
-/// [my修改] 更多的可选播放倍速
+/// 可选播放倍速
 const List<double> defaultPlaySpeedList = [
-  16.0, 8.0, 5.0, 4.0, 3.0, 2.5, 2.0, 1.75, 1.5, 1.25, 1.0, 0.75, 0.5
+  16.0,
+  8.0,
+  5.0,
+  4.0,
+  3.0,
+  2.5,
+  2.0,
+  1.75,
+  1.5,
+  1.25,
+  1.0,
+  0.75,
+  0.5,
 ];
+
+/// 距视频结尾在此阈值内视为"已看完"：
+/// 保存历史时进度归零，续播起点落在其中时从头播放
+const Duration nearEndWatchedThreshold = Duration(seconds: 5);
 
 const String danmakuOnSvg = '''
     <svg xmlns="http://www.w3.org/2000/svg" data-pointer="none" viewBox="0 0 24 24">

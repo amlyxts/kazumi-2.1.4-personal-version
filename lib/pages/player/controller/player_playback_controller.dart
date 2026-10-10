@@ -11,8 +11,12 @@ import 'package:kazumi/services/shaders/shader_asset_service.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/network/proxy_utils.dart';
-import 'package:kazumi/services/player/player_screenshot_service.dart';
+import 'package:kazumi/services/network/system_proxy_service.dart';
+import 'package:kazumi/services/player/playback_cache_policy.dart';
+import 'package:kazumi/services/player/player_error_mapper.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/services/video_source/video_source_format.dart';
+import 'package:kazumi/utils/async_serial_queue.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:mobx/mobx.dart';
@@ -25,32 +29,66 @@ part 'player_playback_controller.g.dart';
 class PlayerPlaybackController = _PlayerPlaybackController
     with _$PlayerPlaybackController;
 
+final class _OwnedPlayer {
+  _OwnedPlayer(this.player);
+
+  final Player player;
+  Future<void>? _disposeFuture;
+
+  Future<void> dispose() {
+    return _disposeFuture ??= _dispose();
+  }
+
+  Future<void> _dispose() async {
+    try {
+      await player.dispose();
+    } catch (error, stackTrace) {
+      KazumiLogger().e(
+        'PlayerPlaybackController: failed to dispose media player',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      try {
+        await player.stop();
+      } catch (_) {}
+    }
+  }
+}
+
 abstract class _PlayerPlaybackController with Store {
   _PlayerPlaybackController({
     required this.shaderAssetService,
     required this.debug,
     required this.videoUrl,
-    required this.onExitSyncPlayRoom,
+    required this.isLocalPlayback,
   });
 
   final ShaderAssetService shaderAssetService;
   final PlayerDebugController debug;
   final String Function() videoUrl;
-  final Future<void> Function() onExitSyncPlayRoom;
-  final PlayerScreenshotService screenshotService =
-      const PlayerScreenshotService();
+  final bool Function() isLocalPlayback;
+  late final PlaybackCachePolicy cachePolicy = PlaybackCachePolicy(
+    isLocalPlayback: isLocalPlayback,
+    currentPlayer: () => mediaPlayer,
+  );
 
-  Player? mediaPlayer;
+  _OwnedPlayer? _ownedPlayer;
+  Player? get mediaPlayer => _ownedPlayer?.player;
   VideoController? videoController;
+
+  final AsyncSerialQueue _prefetchWrites = AsyncSerialQueue();
+  bool _prefetchSuspendWanted = false;
 
   bool hAenable = true;
   late String hardwareDecoder;
   bool androidEnableOpenSLES = true;
-  bool lowMemoryMode = false;
   bool autoPlay = true;
   bool playerDebugMode = false;
   int buttonSkipTime = 80;
   int arrowKeySkipTime = 10;
+
+  /// 历史记录传入的 offset
+  int startOffset = 0;
 
   /// 当前超分辨率模式
   @observable
@@ -83,14 +121,18 @@ abstract class _PlayerPlaybackController with Store {
     return identical(mediaPlayer, player);
   }
 
-  Future<Player?> _discardIfNotCurrent(Player player) async {
-    if (isCurrentPlayer(player)) {
-      return player;
+  Future<Player?> _discardIfNotCurrent(_OwnedPlayer candidate) async {
+    if (identical(_ownedPlayer, candidate)) {
+      return candidate.player;
     }
-    try {
-      await player.dispose();
-    } catch (_) {}
+    await candidate.dispose();
     return null;
+  }
+
+  Future<void> _cancelDebugInfo() async {
+    try {
+      await debug.cancel();
+    } catch (_) {}
   }
 
   @action
@@ -102,6 +144,36 @@ abstract class _PlayerPlaybackController with Store {
     buffer = Duration.zero;
     duration = Duration.zero;
     completed = false;
+    startOffset = 0;
+  }
+
+  /// 本次会话是否从距结尾 [nearEndWatchedThreshold] 以内的位置起播。
+  /// 这样的"播放完成"并非真正看完，应从头重播而非切下一集
+  bool get resumedNearEnd {
+    if (startOffset <= 0 || duration <= Duration.zero) {
+      return false;
+    }
+    return Duration(seconds: startOffset) >= duration - nearEndWatchedThreshold;
+  }
+
+  /// 从头重播当前视频。[startOffset] 在重播落地后才归零，
+  /// 避免自动连播在此期间抢先触发
+  Future<void> restartFromBeginning() async {
+    final player = mediaPlayer;
+    if (player == null) {
+      return;
+    }
+    try {
+      await player.seek(Duration.zero);
+      if (!isCurrentPlayer(player)) {
+        return;
+      }
+      await player.play();
+      startOffset = 0;
+    } catch (e) {
+      KazumiLogger()
+          .w('PlayerController: failed to restart from beginning', error: e);
+    }
   }
 
   bool get playerPlaying {
@@ -160,9 +232,48 @@ abstract class _PlayerPlaybackController with Store {
     }
   }
 
+  /// Android blocks network access for backgrounded apps; a prefetching
+  /// demuxer then burns through ffmpeg's reconnect/segment retries and marks
+  /// the stream EOF, leaving playback permanently stuck once foregrounded.
+  /// Suspending zeroes the readahead window so no new requests are issued
+  /// while buffered data stays available; restore values are mpv defaults,
+  /// which media_kit leaves untouched. Writes are serialized and apply the
+  /// latest requested state, so rapid lifecycle flips cannot reorder.
+  Future<void> setPrefetchSuspended(bool suspended) async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+    _prefetchSuspendWanted = suspended;
+    await _prefetchWrites.run(() async {
+      final wanted = _prefetchSuspendWanted;
+      final player = mediaPlayer;
+      if (player == null) {
+        return;
+      }
+      try {
+        final pp = player.platform as NativePlayer;
+        await pp.setProperty('cache-secs', wanted ? '0' : '36000');
+        if (!isCurrentPlayer(player)) {
+          return;
+        }
+        await pp.setProperty('demuxer-readahead-secs', wanted ? '0' : '1');
+      } catch (e) {
+        KazumiLogger().w(
+          'PlayerController: failed to ${wanted ? 'suspend' : 'resume'} demuxer prefetch',
+          error: e,
+        );
+      }
+    });
+  }
+
   Future<Player?> createVideoController(
-      Map<String, String> httpHeaders, bool adBlockerEnabled,
-      {int offset = 0, bool isLocalPlayback = false}) async {
+    Map<String, String> httpHeaders,
+    bool adBlockerEnabled, {
+    required bool Function() canInstall,
+    int offset = 0,
+    VideoSourceFormat videoSourceFormat = VideoSourceFormat.auto,
+  }) async {
+    startOffset = offset;
     superResolutionMode = SuperResolutionMode.fromStorageValue(
       GStorage.getSetting(SettingsKeys.defaultSuperResolutionMode),
     );
@@ -171,184 +282,212 @@ abstract class _PlayerPlaybackController with Store {
         GStorage.getSetting(SettingsKeys.androidEnableOpenSLES);
     hardwareDecoder = GStorage.getSetting(SettingsKeys.hardwareDecoder);
     autoPlay = GStorage.getSetting(SettingsKeys.autoPlay);
-    lowMemoryMode = GStorage.getSetting(SettingsKeys.lowMemoryMode);
     playerDebugMode = GStorage.getSetting(SettingsKeys.playerDebugMode);
 
-    final Player player = Player(
-      configuration: PlayerConfiguration(
-        bufferSize: lowMemoryMode ? 15 * 1024 * 1024 : 1500 * 1024 * 1024,
-        osc: false,
-        logLevel: MPVLogLevel.values[debug.playerLogLevel],
-        adBlocker: adBlockerEnabled,
+    if (!canInstall()) {
+      return null;
+    }
+    final candidate = _OwnedPlayer(
+      Player(
+        configuration: PlayerConfiguration(
+          bufferSize: cachePolicy.bufferSize,
+          osc: false,
+          logLevel: MPVLogLevel.values[debug.playerLogLevel],
+          adBlocker: adBlockerEnabled,
+        ),
       ),
     );
-    mediaPlayer = player;
-    // [my修改] 强制内核直连，封锁所有代理
-    if (mediaPlayer!.platform is NativePlayer) {
-      final pp = mediaPlayer!.platform as NativePlayer;
-      pp.setProperty('proxy', '');
-      pp.setProperty('http-proxy', '');
-      pp.setProperty('network-proxy', '');
-      pp.setProperty('proxy-auto-config', 'no');
-      pp.setProperty('ytdl-raw-options', 'proxy=');
-      KazumiLogger().i('内核代理已物理锁死');
+    final player = candidate.player;
+    if (!canInstall()) {
+      await candidate.dispose();
+      return null;
     }
+    _ownedPlayer = candidate;
+    cachePolicy.startWatching();
 
-    debug.playerLog.clear();
-    await debug.setup(
-      player,
-      isCurrentPlayer: isCurrentPlayer,
-      playerDebugMode: playerDebugMode,
-    );
-    if (!isCurrentPlayer(player)) {
-      return await _discardIfNotCurrent(player);
-    }
+    try {
+      debug.playerLog.clear();
+      await debug.setup(
+        player,
+        isCurrentPlayer: isCurrentPlayer,
+        playerDebugMode: playerDebugMode,
+      );
+      if (!isCurrentPlayer(player)) {
+        return await _discardIfNotCurrent(candidate);
+      }
 
-    var pp = player.platform as NativePlayer;
-    // media-kit 默认启用硬盘作为双重缓存，这可以维持大缓存的前提下减轻内存压力
-    // media-kit 内部硬盘缓存目录按照 Linux 配置，这导致该功能在其他平台上被损坏
-    // 该设置可以在所有平台上正确启用双重缓存
-    await pp.setProperty("demuxer-cache-dir", await getPlayerTempPath());
-    if (!isCurrentPlayer(player)) {
-      return await _discardIfNotCurrent(player);
-    }
-    await pp.setProperty("af", "scaletempo2=max-speed=8");
-    if (!isCurrentPlayer(player)) {
-      return await _discardIfNotCurrent(player);
-    }
-    // [本地播放] 视频所在目录下文件名匹配的外挂字幕（.srt/.ass 等）自动挂载
-    if (isLocalPlayback) {
-      await pp.setProperty("sub-auto", "fuzzy");
+      var pp = player.platform as NativePlayer;
+      // media-kit 默认启用硬盘作为双重缓存，这可以维持大缓存的前提下减轻内存压力
+      // media-kit 内部硬盘缓存目录按照 Linux 配置，这导致该功能在其他平台上被损坏
+      // 该设置可以在所有平台上正确启用双重缓存
+      await pp.setProperty("demuxer-cache-dir", await getPlayerTempPath());
       if (!isCurrentPlayer(player)) {
-        return await _discardIfNotCurrent(player);
+        return await _discardIfNotCurrent(candidate);
       }
-    }
-    // [my修改] 去色带 (deband)，低清/老片源建议开启
-    final bool debandEnable =
-        GStorage.getSetting(SettingsKeys.playerDebandEnable);
-    await pp.setProperty("deband", debandEnable ? "yes" : "no");
-    if (!isCurrentPlayer(player)) {
-      return await _discardIfNotCurrent(player);
-    }
-    if (Platform.isAndroid) {
-      await pp.setProperty("volume-max", "100");
+      await cachePolicy.apply();
       if (!isCurrentPlayer(player)) {
-        return await _discardIfNotCurrent(player);
+        return await _discardIfNotCurrent(candidate);
       }
-      if (androidEnableOpenSLES) {
-        await pp.setProperty("ao", "opensles");
-      } else {
-        await pp.setProperty("ao", "audiotrack");
-      }
+      await pp.setProperty("af", "scaletempo2=max-speed=8");
       if (!isCurrentPlayer(player)) {
-        return await _discardIfNotCurrent(player);
+        return await _discardIfNotCurrent(candidate);
       }
-    }
-
-    /* [my修改] 防止直连被修改
-    final bool proxyEnable = GStorage.getSetting(SettingsKeys.proxyEnable);
-    if (proxyEnable) {
-      final String proxyUrl = GStorage.getSetting(SettingsKeys.proxyUrl);
-      final formattedProxy = ProxyUtils.getFormattedProxyUrl(proxyUrl);
-      if (formattedProxy != null) {
-        await pp.setProperty("http-proxy", formattedProxy);
+      if (Platform.isAndroid) {
+        await pp.setProperty("volume-max", "100");
         if (!isCurrentPlayer(player)) {
-          return await _discardIfNotCurrent(player);
+          return await _discardIfNotCurrent(candidate);
         }
-        KazumiLogger().i('Player: HTTP 代理设置成功 $formattedProxy');
-      }
-    }
-    */
-
-    await player.setAudioTrack(
-      AudioTrack.auto(),
-    );
-    if (!isCurrentPlayer(player)) {
-      return await _discardIfNotCurrent(player);
-    }
-
-    String? videoRenderer;
-    if (Platform.isAndroid) {
-      final String androidVideoRenderer =
-          GStorage.getSetting(SettingsKeys.androidVideoRenderer);
-
-      if (androidVideoRenderer == 'auto') {
-        // Android 14 及以上使用基于 Vulkan 的 MPV GPU-NEXT 视频输出，着色器性能更好
-        // GPU-NEXT 需要 Vulkan 1.2 支持
-        // 避免 Android 14 及以下设备上部分机型 Vulkan 支持不佳导致的黑屏问题
-        final int androidSdkVersion =
-            await PlatformEnvironmentService.getAndroidSdkVersion();
-        if (!isCurrentPlayer(player)) {
-          return await _discardIfNotCurrent(player);
-        }
-        if (androidSdkVersion >= 34) {
-          videoRenderer = 'gpu-next';
+        if (androidEnableOpenSLES) {
+          await pp.setProperty("ao", "opensles");
         } else {
-          videoRenderer = 'gpu';
+          await pp.setProperty("ao", "audiotrack");
         }
-      } else {
-        videoRenderer = androidVideoRenderer;
-      }
-    }
-
-    if (videoRenderer == 'mediacodec_embed') {
-      hAenable = true;
-      hardwareDecoder = 'mediacodec';
-      superResolutionMode = SuperResolutionMode.off;
-    }
-
-    videoController ??= VideoController(
-      player,
-      configuration: VideoControllerConfiguration(
-        vo: videoRenderer,
-        enableHardwareAcceleration: hAenable,
-        enableAndroidSurfaceProducer: false,
-        hwdec: hAenable ? hardwareDecoder : 'no',
-        androidAttachSurfaceAfterVideoParameters: false,
-      ),
-    );
-    player.setPlaylistMode(PlaylistMode.none);
-    if (!isCurrentPlayer(player)) {
-      return await _discardIfNotCurrent(player);
-    }
-
-    bool showPlayerError = GStorage.getSetting(SettingsKeys.showPlayerError);
-    player.stream.error.listen((event) {
-      if (showPlayerError) {
         if (!isCurrentPlayer(player)) {
-          return;
-        }
-        if (event.toString().contains('Failed to open') && playerBuffering) {
-          KazumiDialog.showToast(
-              message: '加载失败, 请尝试更换其他视频来源', showActionButton: true);
-        } else {
-          KazumiDialog.showToast(
-              message: '播放器内部错误 ${event.toString()} ${videoUrl()}',
-              duration: const Duration(seconds: 5),
-              showActionButton: true);
+          return await _discardIfNotCurrent(candidate);
         }
       }
-      KazumiLogger().e('PlayerController: Player intent error ${videoUrl()}',
-          error: event);
-    });
 
-    if (superResolutionMode != SuperResolutionMode.off) {
-      await setShader(superResolutionMode, player: player);
+      final bool proxyEnable = GStorage.getSetting(SettingsKeys.proxyEnable);
+      if (proxyEnable) {
+        final String proxyUrl = GStorage.getSetting(SettingsKeys.proxyUrl);
+        final formattedProxy = ProxyUtils.getFormattedProxyUrl(proxyUrl);
+        if (formattedProxy != null) {
+          await pp.setProperty("http-proxy", formattedProxy);
+          if (!isCurrentPlayer(player)) {
+            return await _discardIfNotCurrent(candidate);
+          }
+          KazumiLogger().i('Player: HTTP 代理设置成功 $formattedProxy');
+        }
+      } else if (SystemProxyService.isActive) {
+        final proxy = SystemProxyService.proxyFor('https');
+        if (proxy != null) {
+          await pp.setProperty("http-proxy", 'http://${proxy.$1}:${proxy.$2}');
+          if (!isCurrentPlayer(player)) {
+            return await _discardIfNotCurrent(candidate);
+          }
+          KazumiLogger().i('Player: 跟随系统代理 http://${proxy.$1}:${proxy.$2}');
+        }
+      }
+
+      await player.setAudioTrack(
+        AudioTrack.auto(),
+      );
       if (!isCurrentPlayer(player)) {
-        return await _discardIfNotCurrent(player);
+        return await _discardIfNotCurrent(candidate);
       }
-    }
 
-    await player.open(
-      Media(videoUrl(),
-          start: Duration(seconds: offset), httpHeaders: httpHeaders),
-      play: autoPlay,
-    );
-    if (!isCurrentPlayer(player)) {
-      return await _discardIfNotCurrent(player);
-    }
+      String? videoRenderer;
+      if (Platform.isAndroid) {
+        final String androidVideoRenderer =
+            GStorage.getSetting(SettingsKeys.androidVideoRenderer);
 
-    return player;
+        if (androidVideoRenderer == 'auto') {
+          // Android 14 及以上使用基于 Vulkan 的 MPV GPU-NEXT 视频输出，着色器性能更好
+          // GPU-NEXT 需要 Vulkan 1.2 支持
+          // 避免 Android 13 及以下设备上部分机型 Vulkan 支持不佳导致的黑屏问题
+          final int androidSdkVersion =
+              await PlatformEnvironmentService.getAndroidSdkVersion();
+          if (!isCurrentPlayer(player)) {
+            return await _discardIfNotCurrent(candidate);
+          }
+          if (androidSdkVersion >= 34) {
+            videoRenderer = 'gpu-next';
+          } else {
+            videoRenderer = 'gpu';
+          }
+        } else {
+          videoRenderer = androidVideoRenderer;
+        }
+      }
+
+      if (videoRenderer == 'mediacodec_embed') {
+        hAenable = true;
+        hardwareDecoder = 'mediacodec';
+        superResolutionMode = SuperResolutionMode.off;
+      }
+
+      videoController ??= VideoController(
+        player,
+        configuration: VideoControllerConfiguration(
+          vo: videoRenderer,
+          enableHardwareAcceleration: hAenable,
+          enableAndroidSurfaceProducer: false,
+          hwdec: hAenable ? hardwareDecoder : 'no',
+          androidAttachSurfaceAfterVideoParameters: false,
+        ),
+      );
+      player.setPlaylistMode(PlaylistMode.none);
+      if (!isCurrentPlayer(player)) {
+        return await _discardIfNotCurrent(candidate);
+      }
+
+      bool showPlayerError = GStorage.getSetting(SettingsKeys.showPlayerError);
+      player.stream.error.listen((event) {
+        if (isCurrentPlayer(player)) {
+          final actionableMessage = PlayerErrorMapper.toActionableMessage(
+            event,
+            isBuffering: playerBuffering,
+          );
+          if (actionableMessage != null) {
+            KazumiDialog.showToast(
+                message: actionableMessage, showActionButton: true);
+          } else if (showPlayerError) {
+            KazumiDialog.showToast(
+                message: '播放器内部错误 ${event.toString()} ${videoUrl()}',
+                duration: const Duration(seconds: 5),
+                showActionButton: true);
+          }
+        }
+        KazumiLogger().e('PlayerController: Player intent error ${videoUrl()}',
+            error: event);
+      });
+
+      if (superResolutionMode != SuperResolutionMode.off) {
+        await setShader(superResolutionMode, player: player);
+        if (!isCurrentPlayer(player)) {
+          return await _discardIfNotCurrent(candidate);
+        }
+      }
+
+      // [my修改] deband 去色带：低清/老片源建议开启，下次播放生效
+      final bool debandEnable = GStorage.getSetting(
+        SettingsKeys.playerDebandEnable,
+      );
+      await pp.setProperty('deband', debandEnable ? 'yes' : 'no');
+      if (!isCurrentPlayer(player)) {
+        return await _discardIfNotCurrent(candidate);
+      }
+
+      if (videoSourceFormat == VideoSourceFormat.hls) {
+        await pp.setProperty('demuxer-lavf-format', 'hls');
+        if (!isCurrentPlayer(player)) {
+          return await _discardIfNotCurrent(candidate);
+        }
+      }
+
+      await player.open(
+        Media(videoUrl(),
+            start: Duration(seconds: offset), httpHeaders: httpHeaders),
+        play: autoPlay,
+      );
+      if (!isCurrentPlayer(player)) {
+        return await _discardIfNotCurrent(candidate);
+      }
+
+      if (cachePolicy.networkAutomatic) {
+        KazumiDialog.showToast(message: '移动数据下已自动开启低内存模式，可在播放设置中改为始终关闭');
+      }
+
+      return player;
+    } catch (error, stackTrace) {
+      if (identical(_ownedPlayer, candidate)) {
+        cachePolicy.stopWatching();
+        _ownedPlayer = null;
+        videoController = null;
+      }
+      await candidate.dispose();
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   Future<void> setShader(SuperResolutionMode mode, {Player? player}) async {
@@ -384,25 +523,26 @@ abstract class _PlayerPlaybackController with Store {
             ),
           ]);
           break;
-        case SuperResolutionMode.liveActionEfficiency:
+        // [my修改] FSRCNNX 实拍超分两档
+        case SuperResolutionMode.fsrcnnxEfficiency:
           await pp.command([
             'change-list',
             'glsl-shaders',
             'set',
             buildShadersAbsolutePath(
               shaderAssetService.shadersDirectory.path,
-              mpvFsrcnnxShadersLite,
+              mpvFSRCNNXShadersLite,
             ),
           ]);
           break;
-        case SuperResolutionMode.liveActionQuality:
+        case SuperResolutionMode.fsrcnnxQuality:
           await pp.command([
             'change-list',
             'glsl-shaders',
             'set',
             buildShadersAbsolutePath(
               shaderAssetService.shadersDirectory.path,
-              mpvFsrcnnxShaders,
+              mpvFSRCNNXShaders,
             ),
           ]);
           break;
@@ -506,40 +646,19 @@ abstract class _PlayerPlaybackController with Store {
     }
   }
 
-  Future<void> dispose({
-    bool disposeSyncPlayController = true,
-  }) async {
-    final player = mediaPlayer;
-    mediaPlayer = null;
-    videoController = null;
-    final cancelDebugInfoFuture = debug.cancel();
-    if (disposeSyncPlayController) {
-      try {
-        await onExitSyncPlayRoom();
-      } catch (_) {}
-    }
-    try {
-      await cancelDebugInfoFuture;
-    } catch (_) {}
-    try {
-      await player?.dispose();
-    } catch (_) {}
-  }
-
   Future<void> stop() async {
-    try {
-      final player = mediaPlayer;
-      mediaPlayer = null;
-      videoController = null;
-      await debug.cancel();
-      await player?.stop();
-      await player?.dispose();
-      loading = true;
-    } catch (_) {}
-  }
-
-  Future<Uint8List?> screenshot({String format = 'image/jpeg'}) async {
-    return await mediaPlayer!.screenshot(format: format);
+    cachePolicy.stopWatching();
+    final ownedPlayer = _ownedPlayer;
+    _ownedPlayer = null;
+    videoController = null;
+    playing = false;
+    loading = true;
+    // media_kit stops playback as part of disposal before releasing native
+    // resources. Debug subscriptions can be cancelled concurrently.
+    await Future.wait([
+      ownedPlayer?.dispose() ?? Future<void>.value(),
+      _cancelDebugInfo(),
+    ]);
   }
 
   Future<Uint8List?> screenshotPng() async {
@@ -547,6 +666,7 @@ abstract class _PlayerPlaybackController with Store {
     if (player == null) {
       return null;
     }
-    return await screenshotService.capturePng(player);
+    // Encode the captured frame natively; PlayerState dimensions may be stale.
+    return player.safeScreenshot(format: 'image/png');
   }
 }

@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_displaymode/flutter_displaymode.dart';
+
+import 'package:kazumi/bean/settings/settings_list.dart';
+import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
+import 'package:kazumi/bean/widget/loading_indicator.dart';
 import 'package:kazumi/services/storage/storage.dart';
-import 'package:card_settings_ui/card_settings_ui.dart';
 
 class SetDisplayMode extends StatefulWidget {
   const SetDisplayMode({super.key});
@@ -16,12 +19,6 @@ class _SetDisplayModeState extends State<SetDisplayMode> {
   List<DisplayMode> modes = <DisplayMode>[];
   DisplayMode? active;
   DisplayMode? preferred;
-
-  final ValueNotifier<int> page = ValueNotifier<int>(0);
-  late final PageController controller = PageController()
-    ..addListener(() {
-      page.value = controller.page!.round();
-    });
 
   @override
   void initState() {
@@ -49,7 +46,7 @@ class _SetDisplayModeState extends State<SetDisplayMode> {
     FlutterDisplayMode.setPreferredMode(preferred!);
   }
 
-  Future<DisplayMode> getDisplayModeType(modes) async {
+  Future<DisplayMode> getDisplayModeType(List<DisplayMode> modes) async {
     var value = GStorage.getSetting(SettingsKeys.displayMode);
     DisplayMode f = DisplayMode.auto;
     if (value != null) {
@@ -59,42 +56,29 @@ class _SetDisplayModeState extends State<SetDisplayMode> {
   }
 
   @override
-  void dispose() {
-    controller.dispose();
-    page.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final fontFamily = Theme.of(context).textTheme.bodyMedium?.fontFamily;
-    return Scaffold(
-      appBar: AppBar(title: const Text('屏幕帧率设置')),
+    return SettingsDetailScaffold(
+      title: const Text('屏幕帧率设置'),
       body: (modes.isEmpty)
-          ? const CircularProgressIndicator()
+          ? const LoadingIndicator()
           : SettingsList(
-              maxWidth: 1000,
               sections: [
-                SettingsSection(
-                  title: Text('没有生效? 重启app试试',
-                      style: TextStyle(fontFamily: fontFamily)),
+                SettingsRadioSection<DisplayMode>(
+                  title: Text('没有生效? 重启app试试'),
+                  groupValue: preferred,
+                  onChanged: (DisplayMode? newMode) async {
+                    await FlutterDisplayMode.setPreferredMode(newMode!);
+                    await Future<dynamic>.delayed(
+                      const Duration(milliseconds: 100),
+                    );
+                    await fetchAll();
+                  },
                   tiles: modes
                       .map((e) => SettingsTile<DisplayMode>.radioTile(
                             radioValue: e,
-                            groupValue: preferred,
-                            onChanged: (DisplayMode? newMode) async {
-                              await FlutterDisplayMode.setPreferredMode(
-                                  newMode!);
-                              await Future<dynamic>.delayed(
-                                const Duration(milliseconds: 100),
-                              );
-                              await fetchAll();
-                            },
                             title: e == DisplayMode.auto
-                                ? Text('自动',
-                                    style: TextStyle(fontFamily: fontFamily))
-                                : Text('$e${e == active ? "  [系统]" : ""}',
-                                    style: TextStyle(fontFamily: fontFamily)),
+                                ? Text('自动')
+                                : Text('$e${e == active ? "  [系统]" : ""}'),
                           ))
                       .toList(),
                 ),

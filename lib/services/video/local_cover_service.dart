@@ -7,7 +7,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'package:kazumi/pages/video/local_video_launcher.dart';
+import 'package:kazumi/utils/local_video_utils.dart';
 import 'package:kazumi/services/logging/logger.dart';
 
 /// [my修改] 本地视频封面：用静音的临时 media_kit 播放器截取视频画面帧,
@@ -57,7 +57,7 @@ class LocalVideoCoverService {
 
       final existing = _inFlight[cacheKey];
       if (existing != null) {
-        return existing;
+        return await existing;
       }
 
       final task = _captureChain.then(
@@ -66,7 +66,7 @@ class LocalVideoCoverService {
       _inFlight[cacheKey] = task;
       _captureChain = task.then((_) {}, onError: (_) {});
       task.whenComplete(() => _inFlight.remove(cacheKey));
-      return task;
+      return await task;
     } catch (e) {
       KazumiLogger().w('LocalCover: 生成异常', error: e, forceLog: true);
       return null;

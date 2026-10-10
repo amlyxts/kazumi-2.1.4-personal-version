@@ -1,8 +1,7 @@
 import 'dart:math';
-import 'package:flutter/material.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
-import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/services/network/bangumi_acceleration.dart';
 import 'package:mobx/mobx.dart';
 
 part 'popular_controller.g.dart';
@@ -10,7 +9,9 @@ part 'popular_controller.g.dart';
 class PopularController = _PopularController with _$PopularController;
 
 abstract class _PopularController with Store {
-  final ScrollController scrollController = ScrollController();
+  static const int _trendPageSize = 24;
+
+  int _trendOffset = 0;
 
   @observable
   String currentTag = '';
@@ -30,7 +31,7 @@ abstract class _PopularController with Store {
   bool isTimeOut = false;
 
   bool get _bangumiMirrorEnabled =>
-      GStorage.getSetting(SettingsKeys.enableBangumiProxy);
+      BangumiAcceleration.current == BangumiAcceleration.mirror;
 
   void setCurrentTag(String s) {
     currentTag = s;
@@ -40,20 +41,34 @@ abstract class _PopularController with Store {
     bangumiList.clear();
   }
 
+  // Async actions commit each segment between awaits as one transaction,
+  // batching the completion writes into a single notification.
+  @action
   Future<void> queryBangumiByTrend({String type = 'add'}) async {
     if (type == 'init') {
       trendList.clear();
+      _trendOffset = 0;
     }
     isLoadingMore = true;
-    var result = _bangumiMirrorEnabled
+    final result = _bangumiMirrorEnabled
         ? await BangumiApi.getBangumiMirrorPopularSubjects(
-            offset: trendList.length)
-        : await BangumiApi.getBangumiTrendsList(offset: trendList.length);
-    trendList.addAll(result);
+            limit: _trendPageSize,
+            offset: _trendOffset,
+          )
+        : await BangumiApi.getBangumiTrendsList(
+            limit: _trendPageSize,
+            offset: _trendOffset,
+          );
+    if (result.isNotEmpty) {
+      _trendOffset += _trendPageSize;
+    }
+    final existingIds = trendList.map((item) => item.id).toSet();
+    trendList.addAll(result.where((item) => existingIds.add(item.id)));
     isLoadingMore = false;
     isTimeOut = trendList.isEmpty;
   }
 
+  @action
   Future<void> queryBangumiByTag({String type = 'add'}) async {
     if (type == 'init') {
       bangumiList.clear();

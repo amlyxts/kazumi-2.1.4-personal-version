@@ -25,19 +25,21 @@ mixin _$TimelineController on _TimelineController, Store {
     });
   }
 
-  late final _$seasonStringAtom =
-      Atom(name: '_TimelineController.seasonString', context: context);
+  late final _$_selectedDateAtom =
+      Atom(name: '_TimelineController._selectedDate', context: context);
 
-  @override
-  String get seasonString {
-    _$seasonStringAtom.reportRead();
-    return super.seasonString;
+  DateTime get selectedDate {
+    _$_selectedDateAtom.reportRead();
+    return super._selectedDate;
   }
 
   @override
-  set seasonString(String value) {
-    _$seasonStringAtom.reportWrite(value, super.seasonString, () {
-      super.seasonString = value;
+  DateTime get _selectedDate => selectedDate;
+
+  @override
+  set _selectedDate(DateTime value) {
+    _$_selectedDateAtom.reportWrite(value, super._selectedDate, () {
+      super._selectedDate = value;
     });
   }
 
@@ -142,6 +144,42 @@ mixin _$TimelineController on _TimelineController, Store {
     });
   }
 
+  late final _$_sortAtom =
+      Atom(name: '_TimelineController._sort', context: context);
+
+  TimelineSort get sort {
+    _$_sortAtom.reportRead();
+    return super._sort;
+  }
+
+  @override
+  TimelineSort get _sort => sort;
+
+  @override
+  set _sort(TimelineSort value) {
+    _$_sortAtom.reportWrite(value, super._sort, () {
+      super._sort = value;
+    });
+  }
+
+  late final _$loadSeasonAsyncAction =
+      AsyncAction('_TimelineController.loadSeason', context: context);
+
+  @override
+  Future<void> loadSeason(DateTime date) {
+    return _$loadSeasonAsyncAction.run(() => super.loadSeason(date));
+  }
+
+  late final _$_getSchedulesBySeasonAsyncAction = AsyncAction(
+      '_TimelineController._getSchedulesBySeason',
+      context: context);
+
+  @override
+  Future<void> _getSchedulesBySeason(DateTime date) {
+    return _$_getSchedulesBySeasonAsyncAction
+        .run(() => super._getSchedulesBySeason(date));
+  }
+
   late final _$setNotShowAbandonedBangumisAsyncAction = AsyncAction(
       '_TimelineController.setNotShowAbandonedBangumis',
       context: context);
@@ -172,11 +210,32 @@ mixin _$TimelineController on _TimelineController, Store {
         .run(() => super.setOnlyShowWatchingBangumis(value));
   }
 
+  late final _$clearFiltersAsyncAction =
+      AsyncAction('_TimelineController.clearFilters', context: context);
+
+  @override
+  Future<void> clearFilters() {
+    return _$clearFiltersAsyncAction.run(() => super.clearFilters());
+  }
+
+  late final _$_TimelineControllerActionController =
+      ActionController(name: '_TimelineController', context: context);
+
+  @override
+  void changeSort(TimelineSort sort) {
+    final _$actionInfo = _$_TimelineControllerActionController.startAction(
+        name: '_TimelineController.changeSort');
+    try {
+      return super.changeSort(sort);
+    } finally {
+      _$_TimelineControllerActionController.endAction(_$actionInfo);
+    }
+  }
+
   @override
   String toString() {
     return '''
 bangumiCalendar: ${bangumiCalendar},
-seasonString: ${seasonString},
 isLoading: ${isLoading},
 isTimeOut: ${isTimeOut},
 notShowAbandonedBangumis: ${notShowAbandonedBangumis},

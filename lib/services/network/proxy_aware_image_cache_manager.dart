@@ -1,164 +1,74 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:http/io_client.dart';
 import 'package:kazumi/services/logging/logger.dart';
+import 'package:kazumi/services/network/bangumi_ech_image_service.dart';
+import 'package:kazumi/services/network/image_acceleration.dart';
+import 'package:kazumi/services/network/image_file_service.dart';
 import 'package:kazumi/services/network/proxy_utils.dart';
+import 'package:kazumi/services/network/system_proxy_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 class ProxyAwareImageCacheManager extends CacheManager with ImageCacheManager {
   static final ProxyAwareImageCacheManager instance =
-      ProxyAwareImageCacheManager._();
-
-  ProxyAwareImageCacheManager._()
-      : super(
-          Config(
-            DefaultCacheManager.key,
-            fileService: ProxyAwareImageFileService(),
+      ProxyAwareImageCacheManager._(
+        ImageFileService(
+          acceleration: () => ImageAcceleration.fromSetting(
+            GStorage.getSetting(SettingsKeys.imageAcceleration),
           ),
-        );
-}
+          clientFactory: _createHttpClient,
+          echService: BangumiEchImageService(proxyForUrl: _currentEchProxy),
+        ),
+      );
 
-class ProxyAwareImageFileService extends FileService {
-  static String rewriteBangumiMirrorImageUrl(
-    String url, {
-    required bool enableBangumiProxy,
-  }) {
-    if (!enableBangumiProxy) return url;
+  ProxyAwareImageCacheManager._(this._fileService)
+    : super(Config(DefaultCacheManager.key, fileService: _fileService));
 
-    final uri = Uri.tryParse(url);
-    if (uri == null || uri.host != 'lain.bgm.tv') return url;
-    if (uri.scheme != 'http' && uri.scheme != 'https') return url;
+  final ImageFileService _fileService;
 
-    final sourceUrl =
-        uri.host + uri.path + (uri.hasQuery ? '?${uri.query}' : '');
-    return 'https://wsrv.nl/?url=$sourceUrl';
-  }
+  void resetNetworkClients() => _fileService.resetNetworkClients();
 
   @override
-  Future<FileServiceResponse> get(
-    String url, {
-    Map<String, String>? headers,
-  }) async {
-    final client = _createHttpClient();
-    try {
-      final request = await client.getUrl(Uri.parse(
-        rewriteBangumiMirrorImageUrl(
-          url,
-          enableBangumiProxy: _bangumiMirrorEnabled(),
-        ),
-      ));
-      headers?.forEach(request.headers.set);
-      final response = await request.close();
-      return _ProxyAwareImageFileServiceResponse(response, client);
-    } catch (_) {
-      client.close(force: true);
-      rethrow;
+  Future<void> dispose() async {
+    _fileService.close();
+    await super.dispose();
+  }
+
+  static Uri? _currentEchProxy(Uri uri) {
+    final proxy = _currentProxy();
+    if (proxy != null) {
+      return Uri(scheme: 'http', host: proxy.$1, port: proxy.$2);
     }
+    if (Platform.isWindows) {
+      final systemProxy = SystemProxyService.findProxy(uri);
+      if (systemProxy.startsWith('PROXY ')) {
+        return Uri.parse('http://${systemProxy.substring(6)}');
+      }
+    }
+    return null;
   }
 
-  bool _bangumiMirrorEnabled() {
-    return GStorage.getSetting(SettingsKeys.enableBangumiProxy);
-  }
-
-  HttpClient _createHttpClient() {
+  static IOClient _createHttpClient() {
     final client = HttpClient();
     final proxy = _currentProxy();
-    if (proxy == null) return client;
-
-    client.findProxy = (uri) {
-      final host = uri.host.toLowerCase();
-      // [修改] 只允许官方番剧封面走代理，确保封面能显示
-      if (host.contains('bgm.tv') || host.contains('bangumi.tv')) {
-        return 'PROXY ${proxy.$1}:${proxy.$2}';
-      }
-      // 其余图片（比如视频源网站的图片）全部强制直连，省流量
-      return 'DIRECT';
-    };
-    client.badCertificateCallback = (cert, host, port) => true;
-    return client;
+    if (proxy != null) {
+      client.findProxy = (_) => 'PROXY ${proxy.$1}:${proxy.$2}';
+      client.badCertificateCallback = (cert, host, port) => true;
+    } else if (Platform.isWindows) {
+      client.findProxy = SystemProxyService.findProxy;
+    }
+    return IOClient(client);
   }
 
-  (String, int)? _currentProxy() {
-    final bool proxyEnable = GStorage.getSetting(SettingsKeys.proxyEnable);
-    if (!proxyEnable) return null;
+  static (String, int)? _currentProxy() {
+    if (!GStorage.getSetting(SettingsKeys.proxyEnable)) return null;
 
-    final String proxyUrl = GStorage.getSetting(SettingsKeys.proxyUrl);
+    final proxyUrl = GStorage.getSetting(SettingsKeys.proxyUrl);
     final parsed = ProxyUtils.parseProxyUrl(proxyUrl);
     if (parsed == null) {
       KazumiLogger().w('Proxy: 图片缓存代理地址格式错误或为空');
     }
     return parsed;
-  }
-}
-
-class _ProxyAwareImageFileServiceResponse implements FileServiceResponse {
-  _ProxyAwareImageFileServiceResponse(this._response, this._client);
-
-  final HttpClientResponse _response;
-  final HttpClient _client;
-  final DateTime _receivedTime = DateTime.now();
-
-  @override
-  Stream<List<int>> get content async* {
-    try {
-      await for (final chunk in _response) {
-        yield chunk;
-      }
-    } finally {
-      _client.close();
-    }
-  }
-
-  @override
-  int? get contentLength =>
-      _response.contentLength >= 0 ? _response.contentLength : null;
-
-  @override
-  String? get eTag => _response.headers.value(HttpHeaders.etagHeader);
-
-  @override
-  String get fileExtension {
-    return switch (_response.headers.contentType?.mimeType.toLowerCase()) {
-      'image/jpeg' => '.jpg',
-      'image/png' => '.png',
-      'image/gif' => '.gif',
-      'image/webp' => '.webp',
-      'image/bmp' => '.bmp',
-      'image/x-icon' || 'image/vnd.microsoft.icon' => '.ico',
-      'image/avif' => '.avif',
-      'image/svg+xml' => '.svg',
-      _ => '',
-    };
-  }
-
-  @override
-  int get statusCode => _response.statusCode;
-
-  @override
-  DateTime get validTill {
-    var ageDuration = const Duration(days: 7);
-    final controlHeader =
-        _response.headers.value(HttpHeaders.cacheControlHeader);
-    if (controlHeader == null) {
-      return _receivedTime.add(ageDuration);
-    }
-
-    final controlSettings = controlHeader.split(',');
-    for (final setting in controlSettings) {
-      final sanitizedSetting = setting.trim().toLowerCase();
-      if (sanitizedSetting == 'no-cache') {
-        ageDuration = Duration.zero;
-      }
-      if (sanitizedSetting.startsWith('max-age=')) {
-        final validSeconds =
-            int.tryParse(sanitizedSetting.split('=').last) ?? 0;
-        if (validSeconds > 0) {
-          ageDuration = Duration(seconds: validSeconds);
-        }
-      }
-    }
-
-    return _receivedTime.add(ageDuration);
   }
 }

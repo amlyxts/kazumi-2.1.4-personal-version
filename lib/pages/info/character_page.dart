@@ -1,63 +1,73 @@
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:kazumi/bean/widget/empty_state_widget.dart';
+import 'package:skeletonizer/skeletonizer.dart';
+
+import 'package:kazumi/bean/card/user_comments_card.dart';
+import 'package:kazumi/bean/dialog/material_bottom_sheet.dart';
+import 'package:kazumi/bean/widget/connected_tabs.dart';
+import 'package:kazumi/bean/widget/error_widget.dart';
 import 'package:kazumi/modules/character/character_full_item.dart';
 import 'package:kazumi/modules/comments/comment_item.dart';
+import 'package:kazumi/pages/info/character_info_view.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
-import 'package:kazumi/bean/card/network_img_layer.dart';
-import 'package:kazumi/bean/card/character_comments_card.dart';
-import 'package:kazumi/bean/widget/error_widget.dart';
-import 'package:kazumi/bean/widget/image_preview.dart';
 
 class CharacterPage extends StatefulWidget {
-  const CharacterPage({super.key, required this.characterID});
+  const CharacterPage({
+    super.key,
+    required this.characterID,
+    required this.characterName,
+    required this.characterRelation,
+    this.actorNames = const [],
+  });
 
   final int characterID;
+  final String characterName;
+  final String characterRelation;
+  final List<String> actorNames;
 
   @override
   State<CharacterPage> createState() => _CharacterPageState();
 }
 
 class _CharacterPageState extends State<CharacterPage> {
-  late CharacterFullItem characterFullItem;
-  bool loadingCharacter = true;
-  List<CharacterCommentItem> commentsList = [];
-  bool loadingComments = true;
-  bool commentsError = false;
+  CharacterFullItem? _character;
+  List<CharacterCommentItem> _comments = [];
+  bool _loadingComments = true;
+  bool _commentsError = false;
 
-  Future<void> loadCharacter() async {
+  Future<void> _loadCharacter() async {
     setState(() {
-      loadingCharacter = true;
+      _character = null;
     });
-    await BangumiApi.getCharacterByCharacterID(widget.characterID)
-        .then((character) {
-      characterFullItem = character;
-    });
+    final character =
+        await BangumiApi.getCharacterByCharacterID(widget.characterID);
     if (mounted) {
       setState(() {
-        loadingCharacter = false;
+        _character = character;
       });
     }
   }
 
-  Future<void> loadComments() async {
+  Future<void> _loadComments() async {
     setState(() {
-      loadingComments = true;
-      commentsError = false;
+      _loadingComments = true;
+      _commentsError = false;
     });
     try {
-      final value = await BangumiApi.getCharacterCommentsByCharacterID(
+      final response = await BangumiApi.getCharacterCommentsByCharacterID(
           widget.characterID);
-      commentsList = value.commentList;
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          commentsError = true;
-        });
-      }
-    }
-    if (mounted) {
+      if (!mounted) return;
       setState(() {
-        loadingComments = false;
+        _comments = response.commentList;
+        _loadingComments = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _commentsError = true;
+        _loadingComments = false;
       });
     }
   }
@@ -66,32 +76,32 @@ class _CharacterPageState extends State<CharacterPage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      loadCharacter();
-      loadComments();
+      if (!mounted) return;
+      _loadCharacter();
+      _loadComments();
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    final name = widget.characterName.trim();
     return DefaultTabController(
       length: 2,
       child: Scaffold(
+        backgroundColor: Colors.transparent,
         body: Column(
           children: [
-            const PreferredSize(
-              preferredSize: Size.fromHeight(kToolbarHeight),
-              child: Material(
-                child: TabBar(
-                  tabs: [
-                    Tab(text: '人物资料'),
-                    Tab(text: '吐槽箱'),
-                  ],
-                ),
-              ),
+            MaterialBottomSheetHeader(
+              title: name.isEmpty ? '人物' : name,
+              onClose: () => Navigator.of(context).pop(),
+            ),
+            const ConnectedTabs(
+              padding: materialBottomSheetTabsPadding,
+              labels: ['资料', '吐槽'],
             ),
             Expanded(
               child: TabBarView(
-                children: [characterInfoBody, characterCommentsBody],
+                children: [_characterInfoBody, _characterCommentsBody],
               ),
             ),
           ],
@@ -100,155 +110,42 @@ class _CharacterPageState extends State<CharacterPage> {
     );
   }
 
-  Widget get characterInfoBody {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: LayoutBuilder(builder: (context, constraints) {
-        return Column(
+  Widget get _characterInfoBody {
+    final character = _character;
+    if (character != null && character.id == 0) {
+      return GeneralErrorWidget(
+        title: '人物资料加载失败',
+        errMsg: '请检查网络连接后重试。',
+        onRetry: _loadCharacter,
+      );
+    }
+
+    if (character == null) {
+      return const SingleChildScrollView(
+        padding: materialBottomSheetContentPadding,
+        child: Skeletonizer.zone(
+            child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: loadingCharacter
-                  ? const Center(child: CircularProgressIndicator())
-                  : (characterFullItem.id == 0
-                      ? GeneralErrorWidget(
-                          errMsg: '什么都没有找到 (´;ω;`)',
-                          actions: [
-                            GeneralErrorButton(
-                              onPressed: () {
-                                loadCharacter();
-                              },
-                              text: '点击重试',
-                            ),
-                          ],
-                        )
-                      : SizedBox(
-                          width: double.infinity,
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: constraints.maxWidth * 0.3,
-                                height: constraints.maxHeight,
-                                child: GestureDetector(
-                                  onTap: () => ImageViewer.show(
-                                    context,
-                                    imageUrls: [characterFullItem.image],
-                                    heroTag: ImageViewer.heroTagFor(
-                                      characterFullItem.image,
-                                      0,
-                                    ),
-                                  ),
-                                  child: Hero(
-                                    tag: ImageViewer.heroTagFor(
-                                      characterFullItem.image,
-                                      0,
-                                    ),
-                                    child: NetworkImgLayer(
-                                      width: constraints.maxWidth,
-                                      height: constraints.maxHeight,
-                                      src: characterFullItem.image,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: SingleChildScrollView(
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(16.0),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          characterFullItem.name,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .headlineSmall
-                                              ?.copyWith(
-                                                fontWeight: FontWeight.bold,
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .tertiary,
-                                              ),
-                                          overflow: TextOverflow.ellipsis,
-                                          maxLines: 2,
-                                        ),
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                              top: 4.0, bottom: 12.0),
-                                          child: Text(
-                                            characterFullItem.nameCN,
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleMedium
-                                                ?.copyWith(
-                                                  color: Colors.grey[700],
-                                                ),
-                                          ),
-                                        ),
-                                        const Divider(),
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 8.0),
-                                          child: Text(
-                                            '基本信息',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleSmall
-                                                ?.copyWith(
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                          ),
-                                        ),
-                                        Text(
-                                          characterFullItem.info,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodyMedium,
-                                          textAlign: TextAlign.justify,
-                                        ),
-                                        const SizedBox(height: 16.0),
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 8.0),
-                                          child: Text(
-                                            '角色简介',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleSmall
-                                                ?.copyWith(
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                          ),
-                                        ),
-                                        Text(
-                                          characterFullItem.summary,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodyMedium,
-                                          textAlign: TextAlign.justify,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        )),
-            ),
+            Bone(height: 300, width: double.infinity, uniRadius: 28),
+            SizedBox(height: 24),
+            Bone.multiText(lines: 5),
           ],
-        );
-      }),
+        )),
+      );
+    }
+    return CharacterInfoView(
+      character: character,
+      characterName: widget.characterName,
+      characterRelation: widget.characterRelation,
+      actorNames: widget.actorNames,
     );
   }
 
-  Widget get characterCommentsBody {
+  Widget get _characterCommentsBody {
     return CustomScrollView(
       scrollBehavior: const ScrollBehavior().copyWith(
-        // Scrollbars' movement is not linear so hide it.
         scrollbars: false,
-        // Enable mouse drag to refresh
         dragDevices: {
           PointerDeviceKind.mouse,
           PointerDeviceKind.touch,
@@ -256,61 +153,55 @@ class _CharacterPageState extends State<CharacterPage> {
       ),
       slivers: [
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
-          sliver: Builder(builder: (context) {
-            if (loadingComments) {
-              return const SliverFillRemaining(
-                child: Center(
-                  child: CircularProgressIndicator(),
-                ),
-              );
-            }
-            if (commentsError) {
-              return SliverFillRemaining(
-                child: GeneralErrorWidget(
-                  errMsg: '什么都没有找到 (´;ω;`)',
-                  actions: [
-                    GeneralErrorButton(
-                      onPressed: () {
-                        loadComments();
-                      },
-                      text: '点击重试',
-                    ),
-                  ],
-                ),
-              );
-            }
-            if (commentsList.isEmpty) {
-              return const SliverFillRemaining(
-                child: Center(
-                  child: Text('什么都没有找到 (´;ω;`)'),
-                ),
-              );
-            }
-            return SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  // Fix scroll issue caused by height change of network images
-                  // by keeping loaded cards alive.
-                  return KeepAlive(
-                    keepAlive: true,
-                    child: IndexedSemantics(
-                      index: index,
-                      child: CharacterCommentsCard(
-                        commentItem: commentsList[index],
-                      ),
-                    ),
-                  );
-                },
-                childCount: commentsList.length,
-                addAutomaticKeepAlives: false,
-                addRepaintBoundaries: false,
-                addSemanticIndexes: false,
-              ),
-            );
-          }),
+          padding: materialBottomSheetContentPadding,
+          sliver: _commentsSliver,
         ),
       ],
+    );
+  }
+
+  Widget get _commentsSliver {
+    if (_loadingComments) {
+      return SliverList.builder(
+        itemCount: 3,
+        itemBuilder: (context, _) => const UserCommentsCardBone(),
+      );
+    }
+    if (_commentsError) {
+      return SliverFillRemaining(
+        child: GeneralErrorWidget(
+          title: '人物吐槽加载失败',
+          errMsg: '请检查网络连接后重试。',
+          onRetry: _loadComments,
+        ),
+      );
+    }
+    if (_comments.isEmpty) {
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: GeneralEmptyState(
+          icon: Icons.chat_bubble_outline_rounded,
+          title: '还没有评论',
+        ),
+      );
+    }
+    return SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (context, index) {
+          // Keep loaded images alive to prevent scroll jumps.
+          return KeepAlive(
+            keepAlive: true,
+            child: IndexedSemantics(
+              index: index,
+              child: UserCommentsCard.character(_comments[index]),
+            ),
+          );
+        },
+        childCount: _comments.length,
+        addAutomaticKeepAlives: false,
+        addRepaintBoundaries: false,
+        addSemanticIndexes: false,
+      ),
     );
   }
 }

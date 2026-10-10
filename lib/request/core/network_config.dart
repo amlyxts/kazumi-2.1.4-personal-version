@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:dio/io.dart';
+import 'package:kazumi/request/config/api_endpoints.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/network/proxy_utils.dart';
+import 'package:kazumi/services/network/system_proxy_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 class NetworkConfig {
@@ -26,33 +28,60 @@ class NetworkConfig {
 
   bool get hasProxy => proxyHost != null && proxyPort != null;
 
+  /// [my modification] Proxy whitelist: only domains that must go through proxy get the proxy; video sources/rules etc. always connect directly.
+  /// Intentionally does not include bangumi API hosts (api.bgm.tv/next.bgm.tv) —
+  /// those go through the acceleration channel (in ECH mode, proxying would defeat ECH's purpose).
+  static const List<String> _proxyWhitelistHosts = [
+    'dandanplay.com',
+    'cloudflarestorage.com',
+    'bgmapi.com',
+    'kazumi.fyi',
+  ];
+
+  static bool _shouldProxyHost(String host) =>
+      _proxyWhitelistHosts.any((h) => host.contains(h));
+
+  Uri? proxyForUri(Uri uri) {
+    // [my modification] Bangumi API hosts go through the acceleration channel (direct/ECH), do not take the whitelist proxy
+    if (ApiEndpoints.bangumiPublicApiHosts.contains(uri.host)) {
+      return null;
+    }
+    if (!_shouldProxyHost(uri.host)) {
+      return null;
+    }
+    if (hasProxy) return Uri(scheme: 'http', host: proxyHost, port: proxyPort);
+    if (Platform.isWindows) {
+      final proxy = SystemProxyService.findProxy(uri);
+      if (proxy.startsWith('PROXY ')) {
+        return Uri.parse('http://${proxy.substring(6)}');
+      }
+    }
+    return null;
+  }
+
   IOHttpClientAdapter createAdapter() {
     return IOHttpClientAdapter(
       createHttpClient: () {
         final client = HttpClient();
-        if (hasProxy) {
-          // [my修改] 网络代理规则
-          client.findProxy = (uri) {
-            // 定义 API 白名单
-            final List<String> proxyHosts = [
-              'bgm.tv',
-              'bangumi.tv',
-              'dandanplay.com',
-              // [my修改] Cloudflare R2 存储直连极慢（实测~140KB/s），走代理
-              'cloudflarestorage.com',
-            ];
-
-            // 检查当前请求的域名是否在白名单中
-            bool shouldProxy = proxyHosts.any((host) => uri.host.contains(host));
-
-            if (shouldProxy) {
-              return 'PROXY $proxyHost:$proxyPort';
-            }
-
-            // 重点：视频解析地址、规则下载等全部强制直连
+        client.findProxy = (uri) {
+          // [my modification] Same filtering as proxyForUri: only whitelisted domains go through proxy
+          if (ApiEndpoints.bangumiPublicApiHosts.contains(uri.host)) {
             return 'DIRECT';
-          };
-        }
+          }
+          if (!_shouldProxyHost(uri.host)) {
+            return 'DIRECT';
+          }
+          if (hasProxy) {
+            return 'PROXY $proxyHost:$proxyPort';
+          }
+          if (Platform.isWindows) {
+            final proxy = SystemProxyService.findProxy(uri);
+            if (proxy.startsWith('PROXY ')) {
+              return proxy;
+            }
+          }
+          return 'DIRECT';
+        };
         if (allowBadCertificates) {
           client.badCertificateCallback = (cert, host, port) => true;
         }

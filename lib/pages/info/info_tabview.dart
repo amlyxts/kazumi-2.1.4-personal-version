@@ -2,86 +2,78 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/widget/error_widget.dart';
-import 'package:kazumi/bean/card/comments_card.dart';
+import 'package:kazumi/bean/widget/empty_state_widget.dart';
+import 'package:kazumi/pages/info/info_comments_view.dart';
 import 'package:kazumi/bean/card/character_card.dart';
 import 'package:kazumi/bean/card/staff_card.dart';
+import 'package:kazumi/bean/card/network_img_layer.dart';
 import 'package:skeletonizer/skeletonizer.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+import 'package:kazumi/modules/bangumi/bangumi_relation.dart';
 import 'package:kazumi/modules/comments/comment_item.dart';
 import 'package:kazumi/modules/characters/character_item.dart';
 import 'package:kazumi/modules/staff/staff_item.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/utils/device.dart';
 
 class InfoTabView extends StatefulWidget {
   const InfoTabView({
     super.key,
     required this.commentsQueryTimeout,
-    required this.commentsIsEmpty,
+    required this.commentsHasLoaded,
     required this.charactersQueryTimeout,
     required this.charactersIsEmpty,
     required this.staffQueryTimeout,
     required this.staffIsEmpty,
+    required this.relationsQueryTimeout,
+    required this.relationsIsLoading,
+    required this.relationsHasLoaded,
     required this.tabController,
     required this.loadMoreComments,
     required this.loadCharacters,
     required this.loadStaff,
+    required this.loadRelations,
     required this.bangumiItem,
     required this.commentsList,
     required this.commentsIsLoading,
-    this.onCommentsTabSelected,
+    required this.onWriteReview,
     required this.characterList,
     required this.staffList,
+    required this.relationList,
     required this.isLoading,
   });
 
   final bool commentsQueryTimeout;
-  final bool commentsIsEmpty;
+  final bool commentsHasLoaded;
   final bool commentsIsLoading;
-  final VoidCallback? onCommentsTabSelected;
+  final VoidCallback onWriteReview;
   final bool charactersQueryTimeout;
   final bool charactersIsEmpty;
   final bool staffQueryTimeout;
   final bool staffIsEmpty;
+  final bool relationsQueryTimeout;
+  final bool relationsIsLoading;
+  final bool relationsHasLoaded;
   final TabController tabController;
   final Future<void> Function({bool loadMore}) loadMoreComments;
   final Future<void> Function() loadCharacters;
   final Future<void> Function() loadStaff;
+  final Future<void> Function() loadRelations;
   final BangumiItem bangumiItem;
   final List<CommentItem> commentsList;
   final List<CharacterItem> characterList;
   final List<StaffFullItem> staffList;
+  final List<BangumiRelation> relationList;
   final bool isLoading;
 
   @override
   State<InfoTabView> createState() => _InfoTabViewState();
 }
 
-class _InfoTabViewState extends State<InfoTabView>
-    with SingleTickerProviderStateMixin {
+class _InfoTabViewState extends State<InfoTabView> {
   final maxWidth = 950.0;
   bool fullIntro = false;
   bool fullTag = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.tabController.addListener(_onTabChanged);
-    if (widget.tabController.index == 1) {
-      widget.onCommentsTabSelected?.call();
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.tabController.removeListener(_onTabChanged);
-    super.dispose();
-  }
-
-  void _onTabChanged() {
-    if (widget.tabController.index == 1) {
-      widget.onCommentsTabSelected?.call();
-    }
-  }
 
   Widget get infoBody {
     return Center(
@@ -96,8 +88,6 @@ class _InfoTabViewState extends State<InfoTabView>
             children: [
               Text('简介', style: TextStyle(fontSize: 18)),
               const SizedBox(height: 8),
-              // https://stackoverflow.com/questions/54091055/flutter-how-to-get-the-number-of-text-lines
-              // only show expand button when line > 7
               LayoutBuilder(builder: (context, constraints) {
                 final span = TextSpan(text: widget.bangumiItem.summary);
                 final tp =
@@ -109,7 +99,6 @@ class _InfoTabViewState extends State<InfoTabView>
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       SizedBox(
-                        // make intro expandable
                         height: fullIntro ? null : 120,
                         width: MediaQuery.sizeOf(context).width > maxWidth
                             ? maxWidth
@@ -154,7 +143,6 @@ class _InfoTabViewState extends State<InfoTabView>
                         ? widget.bangumiItem.tags.length
                         : 13, (int index) {
                   if (!fullTag && index == 12) {
-                    // make tag expandable
                     return ActionChip(
                       label: Text(
                         '更多 +',
@@ -183,11 +171,11 @@ class _InfoTabViewState extends State<InfoTabView>
                     onPressed: () {
                       final tagName = Uri.encodeComponent(
                           widget.bangumiItem.tags[index].name);
-                      Modular.to.pushNamed('/search/$tagName');
+                      context.pushNamed('/search/$tagName');
                     },
                   );
                 }).toList(),
-              )
+              ),
             ],
           ),
         ),
@@ -195,7 +183,101 @@ class _InfoTabViewState extends State<InfoTabView>
     );
   }
 
-  /// Bone for Skeleton Loader
+  Widget get relationsListBody {
+    return Builder(
+      builder: (BuildContext context) {
+        return CustomScrollView(
+          scrollBehavior: const ScrollBehavior().copyWith(
+            scrollbars: false,
+          ),
+          key: const PageStorageKey<String>('关联'),
+          slivers: <Widget>[
+            SliverOverlapInjector(
+              handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            ),
+            SliverLayoutBuilder(
+              builder: (context, constraints) {
+                if (widget.relationsQueryTimeout) {
+                  return SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: GeneralErrorWidget(
+                      title: '关联条目加载失败',
+                      errMsg: '请检查网络连接后重试。',
+                      onRetry: widget.loadRelations,
+                    ),
+                  );
+                }
+                if (widget.relationsHasLoaded && widget.relationList.isEmpty) {
+                  return const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: GeneralEmptyState(
+                      icon: Icons.account_tree_rounded,
+                      title: '暂无关联条目',
+                    ),
+                  );
+                }
+
+                final horizontalPadding =
+                    ((constraints.crossAxisExtent - maxWidth) / 2)
+                        .clamp(16.0, double.infinity)
+                        .toDouble();
+                final contentWidth =
+                    constraints.crossAxisExtent - horizontalPadding * 2;
+                final crossAxisCount = contentWidth >= 840
+                    ? 3
+                    : contentWidth >= 560
+                        ? 2
+                        : 1;
+                final showSkeleton =
+                    !widget.relationsHasLoaded || widget.relationsIsLoading;
+                final itemCount =
+                    showSkeleton ? crossAxisCount : widget.relationList.length;
+
+                return SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    horizontalPadding,
+                    16,
+                    horizontalPadding,
+                    16,
+                  ),
+                  sliver: SliverGrid(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      mainAxisSpacing: StyleString.cardSpace,
+                      crossAxisSpacing: StyleString.cardSpace,
+                      mainAxisExtent: _RelatedBangumiCardH.cardHeight,
+                    ),
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        if (showSkeleton) {
+                          return LayoutBuilder(
+                            builder: (context, constraints) {
+                              return Skeletonizer.zone(
+                                child: Bone(
+                                  width: constraints.maxWidth,
+                                  height: _RelatedBangumiCardH.cardHeight,
+                                  uniRadius: 14,
+                                ),
+                              );
+                            },
+                          );
+                        }
+                        return _RelatedBangumiCardH(
+                          relation: widget.relationList[index],
+                        );
+                      },
+                      childCount: itemCount,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget get infoBodyBone {
     return Center(
       child: Padding(
@@ -226,146 +308,6 @@ class _InfoTabViewState extends State<InfoTabView>
           ),
         ),
       ),
-    );
-  }
-
-  Widget get commentsListBody {
-    return Builder(
-      builder: (BuildContext context) {
-        return NotificationListener<ScrollEndNotification>(
-          onNotification: (scrollEnd) {
-            final metrics = scrollEnd.metrics;
-            if (metrics.pixels >= metrics.maxScrollExtent - 200) {
-              widget.loadMoreComments(loadMore: widget.commentsList.isNotEmpty);
-            }
-            return true;
-          },
-          child: CustomScrollView(
-            scrollBehavior: const ScrollBehavior().copyWith(
-              scrollbars: false,
-            ),
-            key: PageStorageKey<String>('吐槽'),
-            slivers: <Widget>[
-              SliverOverlapInjector(
-                handle:
-                    NestedScrollView.sliverOverlapAbsorberHandleFor(context),
-              ),
-              SliverLayoutBuilder(builder: (context, _) {
-                final myInterest = widget.bangumiItem.interest;
-                final showMyReview = !widget.commentsIsLoading &&
-                    myInterest != null &&
-                    myInterest.hasUserProfile &&
-                    myInterest.hasReviewContent;
-                final listItemCount =
-                    widget.commentsList.length + (showMyReview ? 1 : 0);
-
-                if (listItemCount > 0) {
-                  return SliverList.separated(
-                    addAutomaticKeepAlives: false,
-                    itemCount: listItemCount,
-                    itemBuilder: (context, index) {
-                      final commentIndex = showMyReview ? index - 1 : index;
-                      final myUser = myInterest?.user;
-                      final card = showMyReview && index == 0 && myUser != null
-                          ? CommentsCard.own(
-                              commentItem: CommentItem(
-                                user: myUser,
-                                comment: Comment(
-                                  rate: myInterest.rate,
-                                  comment: myInterest.comment,
-                                  updatedAt: myInterest.updatedAt,
-                                ),
-                              ),
-                            )
-                          : CommentsCard(
-                              commentItem: widget.commentsList[commentIndex],
-                            );
-                      return SafeArea(
-                        top: false,
-                        bottom: false,
-                        child: Center(
-                          child: Padding(
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 16.0),
-                            child: SizedBox(
-                              width: MediaQuery.sizeOf(context).width > maxWidth
-                                  ? maxWidth
-                                  : MediaQuery.sizeOf(context).width - 32,
-                              child: card,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                    separatorBuilder: (BuildContext context, int index) {
-                      return SafeArea(
-                        top: false,
-                        bottom: false,
-                        child: Center(
-                          child: Padding(
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 16.0),
-                            child: SizedBox(
-                              width: MediaQuery.sizeOf(context).width > maxWidth
-                                  ? maxWidth
-                                  : MediaQuery.sizeOf(context).width - 32,
-                              child: Divider(
-                                  thickness: 0.5, indent: 10, endIndent: 10),
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                }
-                if (widget.commentsQueryTimeout) {
-                  return SliverFillRemaining(
-                    child: GeneralErrorWidget(
-                      errMsg: '获取失败，请重试',
-                      actions: [
-                        GeneralErrorButton(
-                          onPressed: () {
-                            widget.loadMoreComments(
-                                loadMore: widget.commentsList.isNotEmpty);
-                          },
-                          text: '重试',
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                if (widget.commentsIsEmpty) {
-                  return const SliverFillRemaining(
-                    child: Center(
-                      child: Text('什么都没有找到 (´;ω;`)'),
-                    ),
-                  );
-                }
-                return SliverList.builder(
-                  itemCount: 4,
-                  itemBuilder: (context, _) {
-                    return SafeArea(
-                      top: false,
-                      bottom: false,
-                      child: Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: SizedBox(
-                            width: MediaQuery.sizeOf(context).width > maxWidth
-                                ? maxWidth
-                                : MediaQuery.sizeOf(context).width - 32,
-                            child: CommentsCard.bone(),
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                );
-              })
-            ],
-          ),
-        );
-      },
     );
   }
 
@@ -405,22 +347,18 @@ class _InfoTabViewState extends State<InfoTabView>
               if (widget.staffQueryTimeout) {
                 return SliverFillRemaining(
                   child: GeneralErrorWidget(
-                    errMsg: '获取失败，请重试',
-                    actions: [
-                      GeneralErrorButton(
-                        onPressed: () {
-                          widget.loadStaff();
-                        },
-                        text: '重试',
-                      ),
-                    ],
+                    title: '制作人员加载失败',
+                    errMsg: '请检查网络连接后重试。',
+                    onRetry: widget.loadStaff,
                   ),
                 );
               }
               if (widget.staffIsEmpty) {
                 return const SliverFillRemaining(
-                  child: Center(
-                    child: Text('什么都没有找到 (´;ω;`)'),
+                  hasScrollBody: false,
+                  child: GeneralEmptyState(
+                    icon: Icons.groups_rounded,
+                    title: '暂无制作人员信息',
                   ),
                 );
               }
@@ -487,22 +425,18 @@ class _InfoTabViewState extends State<InfoTabView>
               if (widget.charactersQueryTimeout) {
                 return SliverFillRemaining(
                   child: GeneralErrorWidget(
-                    errMsg: '获取失败，请重试',
-                    actions: [
-                      GeneralErrorButton(
-                        onPressed: () {
-                          widget.loadCharacters();
-                        },
-                        text: '重试',
-                      ),
-                    ],
+                    title: '角色列表加载失败',
+                    errMsg: '请检查网络连接后重试。',
+                    onRetry: widget.loadCharacters,
                   ),
                 );
               }
               if (widget.charactersIsEmpty) {
                 return const SliverFillRemaining(
-                  child: Center(
-                    child: Text('什么都没有找到 (´;ω;`)'),
+                  hasScrollBody: false,
+                  child: GeneralEmptyState(
+                    icon: Icons.people_alt_rounded,
+                    title: '暂无角色信息',
                   ),
                 );
               }
@@ -539,18 +473,12 @@ class _InfoTabViewState extends State<InfoTabView>
       controller: widget.tabController,
       children: [
         Builder(
-          // This Builder is needed to provide a BuildContext that is
-          // "inside" the NestedScrollView, so that
-          // sliverOverlapAbsorberHandleFor() can find the
-          // NestedScrollView.
+          // Resolve the overlap handle inside the NestedScrollView.
           builder: (BuildContext context) {
             return CustomScrollView(
               scrollBehavior: const ScrollBehavior().copyWith(
                 scrollbars: false,
               ),
-              // The PageStorageKey should be unique to this ScrollView;
-              // it allows the list to remember its scroll position when
-              // the tab view is not on the screen.
               key: PageStorageKey<String>('概览'),
               slivers: <Widget>[
                 SliverOverlapInjector(
@@ -568,30 +496,116 @@ class _InfoTabViewState extends State<InfoTabView>
             );
           },
         ),
-        commentsListBody,
-        charactersListBody,
-        Builder(
-          builder: (BuildContext context) {
-            return CustomScrollView(
-              scrollBehavior: const ScrollBehavior().copyWith(
-                scrollbars: false,
-              ),
-              key: PageStorageKey<String>('评论'),
-              slivers: <Widget>[
-                SliverOverlapInjector(
-                  handle:
-                      NestedScrollView.sliverOverlapAbsorberHandleFor(context),
-                ),
-                // TODO: 评论区
-                SliverFillRemaining(
-                  child: Center(child: Text('施工中')),
-                ),
-              ],
-            );
-          },
+        InfoCommentsView(
+          interest: widget.bangumiItem.interest,
+          comments: widget.commentsList,
+          isLoading: widget.commentsIsLoading,
+          hasLoaded: widget.commentsHasLoaded,
+          hasError: widget.commentsQueryTimeout,
+          onReviewTap: widget.onWriteReview,
+          onRetry: () => widget.loadMoreComments(loadMore: false),
+          onLoadMore: () => widget.loadMoreComments(loadMore: true),
         ),
+        charactersListBody,
+        relationsListBody,
         staffListBody,
       ],
+    );
+  }
+}
+
+class _RelatedBangumiCardH extends StatelessWidget {
+  const _RelatedBangumiCardH({required this.relation});
+
+  static const double cardHeight = 108;
+  static const double imageHeight = 92;
+  static const double posterAspectRatio = 0.65;
+
+  final BangumiRelation relation;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final textScaler =
+        MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.1);
+    final relationLabel = relation.relation.isEmpty ? '关联' : relation.relation;
+    final bangumiItem = relation.toBangumiItem();
+    final title = bangumiItem.nameCn.isEmpty
+        ? bangumiItem.name.trim()
+        : bangumiItem.nameCn.trim();
+
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      color: colorScheme.surfaceContainerLow,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: InkWell(
+        onTap: () {
+          context.pushNamed('/info/', arguments: bangumiItem);
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final gap = constraints.maxWidth.clamp(0.0, 10.0).toDouble();
+              final maxImageWidth =
+                  (constraints.maxWidth - gap).clamp(0.0, 152.0);
+              final imageWidth = (constraints.maxWidth * 0.42)
+                  .clamp(0.0, maxImageWidth)
+                  .toDouble();
+
+              return Row(
+                children: [
+                  NetworkImgLayer(
+                    src: bangumiItem.images['large'] ?? '',
+                    width: imageWidth,
+                    height: imageHeight,
+                    origAspectRatio: posterAspectRatio,
+                  ),
+                  SizedBox(width: gap),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.topLeft,
+                            child: Text(
+                              title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textScaler: textScaler,
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                color: colorScheme.onSurface,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Text(
+                          relationLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textScaler: textScaler,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
     );
   }
 }

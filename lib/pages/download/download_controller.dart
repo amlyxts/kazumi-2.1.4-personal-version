@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/modules/download/download_module.dart';
 import 'package:kazumi/modules/danmaku/danmaku_module.dart';
 import 'package:kazumi/plugins/plugins.dart';
@@ -21,8 +20,15 @@ part 'download_controller.g.dart';
 class DownloadController = _DownloadController with _$DownloadController;
 
 abstract class _DownloadController with Store {
-  final _repository = Modular.get<IDownloadRepository>();
-  final _downloadManager = Modular.get<IDownloadManager>();
+  _DownloadController(
+    this._repository,
+    this._downloadManager,
+    this._pluginsController,
+  );
+
+  final IDownloadRepository _repository;
+  final IDownloadManager _downloadManager;
+  final PluginsController _pluginsController;
   final _backgroundService = BackgroundDownloadService();
   final _resolverPool = VideoSourceResolverPool();
 
@@ -327,8 +333,7 @@ abstract class _DownloadController with Store {
   }
 
   Plugin? _findPlugin(String pluginName) {
-    final pluginsController = Modular.get<PluginsController>();
-    for (final plugin in pluginsController.pluginList) {
+    for (final plugin in _pluginsController.pluginList) {
       if (plugin.name == pluginName) return plugin;
     }
     return null;
@@ -870,45 +875,63 @@ abstract class _DownloadController with Store {
     }
   }
 
-  Future<void> cancelDownload(
-      int bangumiId, String pluginName, int episodeNumber) async {
-    final recordKey = '${pluginName}_$bangumiId';
-    _downloadManager.cancel(recordKey, episodeNumber);
-    _cancelResolve(recordKey, episodeNumber);
-    await _downloadManager.deleteEpisodeFiles(
-        bangumiId, pluginName, episodeNumber);
-    await _repository.deleteEpisode(recordKey, episodeNumber);
-    _refreshRecord(recordKey);
-    _queueBackgroundNotificationUpdate();
-  }
-
   Future<void> deleteRecord(int bangumiId, String pluginName) async {
     final recordKey = '${pluginName}_$bangumiId';
     final record = _repository.getRecord(recordKey);
-    if (record != null) {
-      for (final ep in record.episodes.keys) {
-        _downloadManager.cancel(recordKey, ep);
-        _speeds.remove('${recordKey}_$ep');
-      }
-    }
+    final episodes = <int, DownloadEpisode>{...?record?.episodes};
     _cancelResolveRecord(recordKey);
-    await _downloadManager.deleteRecordFiles(bangumiId, pluginName);
-    await _repository.deleteRecord(recordKey);
-    _refreshRecord(recordKey);
-    _queueBackgroundNotificationUpdate();
+    await _stopEpisodes(recordKey, episodes);
+    try {
+      await _downloadManager.deleteRecordFiles(
+        bangumiId,
+        pluginName,
+        record: record,
+      );
+      await _repository.deleteRecord(recordKey);
+    } finally {
+      _refreshRecord(recordKey);
+      _queueBackgroundNotificationUpdate();
+    }
   }
 
   Future<void> deleteEpisode(
       int bangumiId, String pluginName, int episodeNumber) async {
     final recordKey = '${pluginName}_$bangumiId';
-    _downloadManager.cancel(recordKey, episodeNumber);
-    _speeds.remove('${recordKey}_$episodeNumber');
+    final episode =
+        _repository.getEpisode(bangumiId, pluginName, episodeNumber);
     _cancelResolve(recordKey, episodeNumber);
-    await _downloadManager.deleteEpisodeFiles(
-        bangumiId, pluginName, episodeNumber);
-    await _repository.deleteEpisode(recordKey, episodeNumber);
-    _refreshRecord(recordKey);
-    _queueBackgroundNotificationUpdate();
+    await _stopEpisodes(recordKey, {episodeNumber: ?episode});
+    try {
+      await _downloadManager.deleteEpisodeFiles(
+        bangumiId,
+        pluginName,
+        episodeNumber,
+        episode: episode,
+      );
+      await _repository.deleteEpisode(recordKey, episodeNumber);
+    } finally {
+      _refreshRecord(recordKey);
+      _queueBackgroundNotificationUpdate();
+    }
+  }
+
+  /// Stops downloads before their files are deleted. Active episodes are
+  /// persisted as paused first, so a failed deletion leaves them resumable.
+  Future<void> _stopEpisodes(
+      String recordKey, Map<int, DownloadEpisode> episodes) async {
+    for (final episodeNumber in episodes.keys) {
+      _downloadManager.cancel(recordKey, episodeNumber);
+      _speeds.remove('${recordKey}_$episodeNumber');
+    }
+    for (final entry in episodes.entries) {
+      final episode = entry.value;
+      if (episode.status == DownloadStatus.downloading ||
+          episode.status == DownloadStatus.resolving ||
+          episode.status == DownloadStatus.pending) {
+        episode.status = DownloadStatus.paused;
+        await _repository.updateEpisode(recordKey, entry.key, episode);
+      }
+    }
   }
 
   Future<void> priorityDownload({

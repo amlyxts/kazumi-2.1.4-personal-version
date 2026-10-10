@@ -6,23 +6,23 @@ enum SuperResolutionMode {
   ),
   efficiency(
     storageValue: 2,
-    label: '动漫-效率档',
-    description: 'Anime4K超分, 适合动漫 (效率优先)',
+    label: '效率档',
+    description: '默认启用基于Anime4K的超分辨率 (效率优先)',
   ),
   quality(
     storageValue: 3,
-    label: '动漫-质量档',
-    description: 'Anime4K超分, 适合动漫 (质量优先)',
+    label: '质量档',
+    description: '默认启用基于Anime4K的超分辨率 (质量优先)',
   ),
-  liveActionEfficiency(
+  fsrcnnxEfficiency(
     storageValue: 4,
-    label: '电视剧-效率档',
-    description: 'FSRCNNX超分, 适合真人实拍内容 (效率优先)',
+    label: '实拍-效率档',
+    description: '基于FSRCNNX的超分辨率 (实拍内容适用, 效率优先)',
   ),
-  liveActionQuality(
+  fsrcnnxQuality(
     storageValue: 5,
-    label: '电视剧-质量档',
-    description: 'FSRCNNX超分, 适合真人实拍内容 (质量优先, 4K输出时开销较大)',
+    label: '实拍-质量档',
+    description: '基于FSRCNNX的超分辨率 (实拍内容适用, 质量优先)',
   );
 
   const SuperResolutionMode({

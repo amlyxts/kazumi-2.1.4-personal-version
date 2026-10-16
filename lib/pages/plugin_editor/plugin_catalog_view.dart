@@ -143,11 +143,43 @@ class _PluginCatalogViewState extends State<PluginCatalogView> {
     }
   }
 
+  /// [my修改] 第三方仓库的高危规则安装确认: 目录条目带 antiCrawlerEnabled
+  /// (自定义 JS 验证脚本类) 且来自自定义仓库时, 先弹风险确认。
+  /// 官方仓库规则不弹 (作者已审), 但同类规则仍建议用测试器 --audit 复核。
+  Future<bool> _confirmRiskyInstall(PluginHTTPItem item) async {
+    if (item.sourceBase.isEmpty || !item.antiCrawlerEnabled) return true;
+    final theme = Theme.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('安装含验证脚本的规则?'),
+        content: Text(
+          '「${item.name}」来自自定义仓库, 且带有反爬验证配置。'
+          '若其为"自定义脚本"型 (captchaType 3), 安装后规则提供的 JavaScript '
+          '将在应用的 WebView 中执行——请仅安装可信来源的此类规则。',
+          style: theme.textTheme.bodyMedium,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('仍然安装'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   Future<void> _install(
       PluginHTTPItem item, PluginCatalogItemStatus status) async {
     if (!_installing.add(item.name)) return;
     setState(() {});
     try {
+      if (!await _confirmRiskyInstall(item)) return;
       await updatePluginWithFeedback(_controller, item.name,
           installing: status == PluginCatalogItemStatus.install);
     } finally {

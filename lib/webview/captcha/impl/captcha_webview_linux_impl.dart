@@ -362,12 +362,17 @@ $script
       String captchaCode, String inputXpath, String buttonXpath) async {
     logEventController
         .add('[Captcha WebView] Filling input and clicking button');
-    final escapedCode =
-        captchaCode.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-    final escapedInput =
-        inputXpath.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-    final escapedButton =
-        buttonXpath.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+    // [my修改] 补换行与 </script> 转义: 恶意 XPath/验证码内容可借换行打断
+    // JS 字符串造成注入脚本语法失效 (DoS), </script> 可提前闭合注入块
+    String jsEscape(String s) => s
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'")
+        .replaceAll('\n', '\\n')
+        .replaceAll('\r', '\\r')
+        .replaceAll('</script>', '<\\/script>');
+    final escapedCode = jsEscape(captchaCode);
+    final escapedInput = jsEscape(inputXpath);
+    final escapedButton = jsEscape(buttonXpath);
     final script = '''
 (function() {
   function evalXpath(xpath) {

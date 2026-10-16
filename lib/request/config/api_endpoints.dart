@@ -5,7 +5,9 @@ class ApiEndpoints {
   static const String version = appBuildName ?? '0.0.0';
 
   /// 规则API级别
-  static const int apiLevel = 8;
+  // [my修改] 8 → 9: 官方规则仓库已发布 api 9 规则 (mutefun 1.4 等), 上游 main 的
+  // apiLevel 同为 9, 且规则解析代码与上游逐字节一致 (已 diff 验证), 仅常量落后。
+  static const int apiLevel = 9;
 
   /// 项目主页
   static const String projectUrl = "https://kazumi.app/";

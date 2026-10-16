@@ -1048,7 +1048,11 @@ abstract class _DownloadController with Store {
         .where((e) =>
             e.value.status == DownloadStatus.paused ||
             e.value.status == DownloadStatus.failed ||
-            e.value.status == DownloadStatus.pending)
+            e.value.status == DownloadStatus.pending ||
+            // [my修改] 应用被杀时 resolving/downloading 状态会成僵尸 (永无恢复
+            // 入口且无重试按钮), 启动恢复时一并纳入重试
+            e.value.status == DownloadStatus.resolving ||
+            e.value.status == DownloadStatus.downloading)
         .toList()
       ..sort((a, b) => a.key.compareTo(b.key));
 

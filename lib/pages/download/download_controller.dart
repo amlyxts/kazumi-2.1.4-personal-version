@@ -576,12 +576,29 @@ abstract class _DownloadController with Store {
         if (lease.isCancelled) {
           throw const VideoSourceCancelledException();
         }
-        final source = await lease.resolve(
-          fullUrl,
-          useLegacyParser: plugin.useLegacyParser,
-          timeout: const Duration(seconds: 30),
-        );
-        m3u8Url = source.url;
+        // [my修改] 超时 30→45s; 超时自动重试一次 (慢站/限流站首解析易超时)
+        VideoSource? source;
+        try {
+          source = await lease.resolve(
+            fullUrl,
+            useLegacyParser: plugin.useLegacyParser,
+            timeout: const Duration(seconds: 45),
+          );
+          m3u8Url = source.url;
+        } on VideoSourceTimeoutException {
+          KazumiLogger().w(
+              'DownloadController: resolve timed out, retrying once: ');
+          try {
+            source = await lease.resolve(
+              fullUrl,
+              useLegacyParser: plugin.useLegacyParser,
+              timeout: const Duration(seconds: 45),
+            );
+            m3u8Url = source.url;
+          } on VideoSourceTimeoutException {
+            rethrow;
+          }
+        }
       } on VideoSourceTimeoutException {
         if (lease.isCancelled) {
           wasCancelled = true;

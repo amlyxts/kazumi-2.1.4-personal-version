@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:kazumi/webview/video/video_webview_controller.dart';
+import 'package:kazumi/services/video_source/video_source_format.dart';
 import 'package:kazumi/services/video_source/video_source_service.dart';
 
 /// WebView 视频源解析服务
@@ -21,6 +24,70 @@ class WebViewVideoSourceService implements IVideoSourceService {
       StreamController<String>.broadcast();
   Stream<String> get onLog => _logController.stream;
 
+  // [my修改] 明文直链快路径: 部分站点 (MacCMS encrypt=0) 的播放页内嵌未加密的
+  // 播放器配置/媒体 URL, 纯 dio 提取即可命中, 免去 WebView 加载+播放器执行 (5-10s)。
+  // 提取失败的 host 记入本实例黑名单 (服务实例随播放/下载会话创建, 自然重置)。
+  final Set<String> _directFailures = {};
+  final Dio _directDio = Dio(BaseOptions(
+    connectTimeout: const Duration(seconds: 6),
+    receiveTimeout: const Duration(seconds: 6),
+    validateStatus: (s) => s != null && s < 400,
+  ));
+
+  static final RegExp _playerConfigRe =
+      RegExp(r'player_aaaa\s*=\s*(\{[^}]*\})');
+  static final RegExp _rawMediaRe =
+      RegExp('https?://[^\\s"\'<>\\\\]+?\\.(?:m3u8|mp4)[^\\s"\'<>\\\\]*');
+
+  /// 从播放页 HTML 提取明文媒体直链; 无把握一律返回 null 走 WebView
+  Future<VideoSource?> _tryDirectResolve(String episodeUrl) async {
+    final host = Uri.tryParse(episodeUrl)?.host ?? '';
+    if (host.isEmpty || _directFailures.contains(host)) return null;
+    String html;
+    try {
+      final r = await _directDio.get<String>(episodeUrl,
+          options: Options(responseType: ResponseType.plain, headers: {
+            'user-agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          }));
+      html = r.data ?? '';
+    } catch (_) {
+      _directFailures.add(host);
+      return null;
+    }
+    String? mediaUrl;
+    // 1. MacCMS 明文播放器配置 (encrypt 0: url 为明文 http 链接)
+    final cfgMatch = _playerConfigRe.firstMatch(html);
+    if (cfgMatch != null) {
+      try {
+        final cfg = jsonDecode(cfgMatch.group(1)!);
+        if (cfg is Map) {
+          final u = cfg['url']?.toString() ?? '';
+          if (u.startsWith('http') &&
+              (u.contains('.m3u8') || u.contains('.mp4'))) {
+            mediaUrl = u;
+          }
+        }
+      } catch (_) {}
+    }
+    // 2. 页面裸媒体链接
+    mediaUrl ??= _rawMediaRe.firstMatch(html)?.group(0);
+    if (mediaUrl == null ||
+        !(mediaUrl.contains('.m3u8') || mediaUrl.contains('.mp4'))) {
+      _directFailures.add(host);
+      return null;
+    }
+    _logController.add(
+        '[DirectResolve] 明文直链命中, 跳过 WebView: ${mediaUrl.substring(0, mediaUrl.length.clamp(0, 60))}');
+    return VideoSource(
+      url: mediaUrl,
+      offset: 0,
+      type: VideoSourceType.online,
+      format:
+          mediaUrl.contains('.m3u8') ? VideoSourceFormat.hls : VideoSourceFormat.auto,
+    );
+  }
+
   @override
   Future<VideoSource> resolve(
     String episodeUrl, {
@@ -38,13 +105,28 @@ class WebViewVideoSourceService implements IVideoSourceService {
     _activeRequest = request;
 
     final resolveFuture = resolveTail.then(
-      (_) => _runResolve(
-        request,
-        episodeUrl,
-        useLegacyParser: useLegacyParser,
-        offset: offset,
-        timeout: timeout,
-      ),
+      (_) async {
+        // [my修改] 快路径: 明文直链直接命中则免 WebView
+        try {
+          final direct = await _tryDirectResolve(episodeUrl)
+              .timeout(const Duration(seconds: 8), onTimeout: () {
+            final host = Uri.tryParse(episodeUrl)?.host ?? '';
+            if (host.isNotEmpty) _directFailures.add(host);
+            return null;
+          });
+          request.throwIfNotCurrent(_activeRequest);
+          if (direct != null) return direct;
+        } on VideoSourceCancelledException {
+          rethrow;
+        } catch (_) {}
+        return _runResolve(
+          request,
+          episodeUrl,
+          useLegacyParser: useLegacyParser,
+          offset: offset,
+          timeout: timeout,
+        );
+      },
     );
 
     _resolveTail = resolveFuture.then<void>((_) {}, onError: (_) {});

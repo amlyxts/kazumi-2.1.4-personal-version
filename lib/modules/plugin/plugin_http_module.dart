@@ -6,6 +6,10 @@ class PluginHTTPItem {
   int lastUpdate;
   bool antiCrawlerEnabled;
 
+  /// [my修改] 来源仓库: '' = 官方仓库; 否则为自定义仓库 base 前缀。
+  /// 由目录 API 在拉取时打标, 安装/更新按此寻址, 不持久化。
+  String sourceBase;
+
   PluginHTTPItem({
     required this.name,
     required this.version,
@@ -13,6 +17,7 @@ class PluginHTTPItem {
     required this.author,
     required this.lastUpdate,
     this.antiCrawlerEnabled = false,
+    this.sourceBase = '',
   });
 
   factory PluginHTTPItem.fromJson(Map<String, dynamic> json) {

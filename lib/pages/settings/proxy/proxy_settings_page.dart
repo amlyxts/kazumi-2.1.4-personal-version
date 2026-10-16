@@ -5,6 +5,8 @@ import 'package:kazumi/bean/settings/network_mirror_settings.dart';
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
 import 'package:kazumi/bean/settings/settings_list.dart';
 import 'package:kazumi/pages/settings/proxy/ocr_channel_editor.dart';
+import 'package:kazumi/pages/settings/proxy/rule_repo_editor.dart';
+import 'package:kazumi/request/apis/plugin_catalog_api.dart';
 import 'package:kazumi/services/network/proxy_manager.dart';
 import 'package:kazumi/services/plugin/captcha_ocr_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -36,56 +38,9 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
     if (saved && mounted) setState(() {});
   }
 
-  Future<void> _editCustomRuleRepo() async {
-    final controller = TextEditingController(
-      text: GStorage.getSetting(SettingsKeys.customRuleRepoUrl),
-    );
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          scrollable: true,
-          title: const Text('自定义规则仓库'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: controller,
-                autocorrect: false,
-                enableSuggestions: false,
-                decoration: const InputDecoration(
-                  labelText: '仓库 base 地址',
-                  hintText: 'https://raw.githubusercontent.com/<user>/<repo>/main/',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '仓库需含 index.json 目录与 <规则名>.json 规则体；'
-                '同名规则以自定义仓库为准，其余官方规则照常显示；'
-                '留空恢复仅官方仓库。raw.githubusercontent 源可加 gh-proxy 前缀加速。',
-                style: Theme.of(dialogContext).textTheme.bodySmall,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                await GStorage.putSetting(SettingsKeys.customRuleRepoUrl,
-                    controller.text.trim());
-                if (dialogContext.mounted) Navigator.of(dialogContext).pop(true);
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        );
-      },
-    );
-    if (saved == true && mounted) setState(() {});
+  Future<void> _manageRuleRepos() async {
+    final saved = await showRuleRepoManager(context);
+    if (saved && mounted) setState(() {});
   }
 
   @override
@@ -127,12 +82,14 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
             tiles: [
               SettingsTile(
                 leading: Icons.inventory_2_outlined,
-                onPressed: (_) => _editCustomRuleRepo(),
+                onPressed: (_) => _manageRuleRepos(),
                 title: const Text('自定义规则仓库'),
                 description: Text(() {
-                  final repo =
-                      GStorage.getSetting(SettingsKeys.customRuleRepoUrl);
-                  return repo.isEmpty ? '未配置 (仅官方仓库)' : '自定义 + 官方合并';
+                  final count =
+                      PluginCatalogApi.listRepos().length;
+                  return count == 0
+                      ? '未配置 (仅官方仓库)'
+                      : '已配置 $count 个 (插件市场顶部切换)';
                 }()),
               ),
             ],

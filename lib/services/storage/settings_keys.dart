@@ -67,8 +67,8 @@ class SettingsKeys {
     '',
     group: SettingGroup.misc,
   );
-  static const customRuleRepoUrl = SettingKey<String>(
-    _SettingBoxKey.customRuleRepoUrl,
+  static const customRuleRepos = SettingKey<String>(
+    _SettingBoxKey.customRuleRepos,
     '',
     group: SettingGroup.misc,
   );
@@ -719,7 +719,7 @@ class _SettingBoxKey {
       searchEnhanceEnable = 'searchEnhanceEnable',
       captchaOcrEnable = 'captchaOcrEnable',
       captchaOcrChannels = 'captchaOcrChannels',
-      customRuleRepoUrl = 'customRuleRepoUrl',
+      customRuleRepos = 'customRuleRepos',
       autoUpdate = 'autoUpdate',
       alwaysOntop = 'alwaysOntop',
       defaultPlaySpeed = 'defaultPlaySpeed',

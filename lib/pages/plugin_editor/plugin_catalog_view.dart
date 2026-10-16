@@ -11,6 +11,7 @@ import 'package:kazumi/bean/widget/loading_indicator.dart';
 import 'package:kazumi/bean/widget/state_presentation.dart';
 import 'package:kazumi/modules/plugin/plugin_http_module.dart';
 import 'package:kazumi/pages/plugin_editor/plugin_update_actions.dart';
+import 'package:kazumi/request/apis/plugin_catalog_api.dart';
 import 'package:kazumi/pages/plugin_editor/rule_management_widgets.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -50,11 +51,16 @@ class _PluginCatalogViewState extends State<PluginCatalogView> {
   bool _loading = true;
   bool _loadFailed = false;
 
+  // [my修改] 仓库切换: 打开页面默认官方仓库, 切到自定义仓库按需加载
+  List<RuleRepo> _repos = [];
+  String? _selectedRepoBase;
+
   PluginsController get _controller => widget.controller;
 
   @override
   void initState() {
     super.initState();
+    _repos = PluginCatalogApi.listRepos();
     if (_controller.isPluginCatalogFresh) {
       _loading = false;
     } else {
@@ -87,6 +93,33 @@ class _PluginCatalogViewState extends State<PluginCatalogView> {
           _loading = false;
           _loadFailed = true;
         });
+      }
+    }
+  }
+
+  Future<void> _switchRepo(RuleRepo? repo) async {
+    final targetBase = repo?.base;
+    final targetName = repo?.name ?? '官方仓库';
+    if (_selectedRepoBase == targetBase) return;
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
+    try {
+      await _controller.switchCatalogForRepo(targetBase, targetName);
+      if (mounted) {
+        setState(() {
+          _selectedRepoBase = targetBase;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadFailed = true;
+        });
+        KazumiDialog.showToast(message: '切换到「$targetName」失败, 请检查仓库地址或网络');
       }
     }
   }
@@ -185,6 +218,24 @@ class _PluginCatalogViewState extends State<PluginCatalogView> {
                       icon: const Icon(Icons.close_rounded))),
         ),
         const SizedBox(height: 12),
+        if (_repos.isNotEmpty) ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              FilterChip(
+                  label: const Text('官方仓库'),
+                  selected: _selectedRepoBase == null,
+                  onSelected: (_) => _switchRepo(null)),
+              for (final repo in _repos)
+                FilterChip(
+                    label: Text(repo.name),
+                    selected: _selectedRepoBase == repo.base,
+                    onSelected: (_) => _switchRepo(repo)),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
         Wrap(
           spacing: 8,
           runSpacing: 4,

@@ -32,6 +32,9 @@ abstract class _DownloadController with Store {
   final _backgroundService = BackgroundDownloadService();
   final _resolverPool = VideoSourceResolverPool();
 
+  // [my修改] 解析超时自动重排: 每集最多 2 次冷却重排, 计数在成功后清除
+  final _resolveAttempts = <String, int>{};
+
   @observable
   ObservableList<DownloadRecord> records = ObservableList<DownloadRecord>();
   final ObservableList<String> recordKeys = ObservableList<String>();
@@ -623,6 +626,31 @@ abstract class _DownloadController with Store {
       }
 
       if (m3u8Url == null || m3u8Url.isEmpty) {
+        // [my修改] 解析超时自动冷却重排: 批量下载触发站点限流时, 失败集数
+        // 延迟 25 秒自动重新入队 (每集最多 2 次), 超过后才标记失败
+        final attemptKey = '${request.recordKey}:${request.episodeNumber}';
+        final attempts = (_resolveAttempts[attemptKey] ?? 0) + 1;
+        _resolveAttempts[attemptKey] = attempts;
+        if (attempts <= 2) {
+          KazumiLogger().w(
+              'DownloadController: episode ${request.episodeNumber} 解析超时, '
+              '25s 后自动重排 (第 $attempts/2 次)');
+          final requeue = request;
+          Future.delayed(const Duration(seconds: 25), () {
+            // 计数保留 (跨重排累计), 成功或最终失败时才清除;
+            // 状态已不是 resolving (被取消/删除) 则不重排
+            final record = _repository.getRecord(requeue.recordKey);
+            if (record == null) return;
+            if (record.episodes[requeue.episodeNumber]?.status !=
+                DownloadStatus.resolving) {
+              return;
+            }
+            _resolveQueue.add(requeue);
+            _processResolveQueue();
+          });
+          return;
+        }
+        _resolveAttempts.remove(attemptKey);
         _failEpisode(request.recordKey, request.episodeNumber, '解析视频源超时');
         return;
       }

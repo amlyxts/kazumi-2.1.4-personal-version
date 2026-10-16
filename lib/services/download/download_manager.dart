@@ -366,6 +366,14 @@ class DownloadManager implements IDownloadManager {
     }
   }
 
+  // [my修改] 集间启动间隔: 同站点连续解析会触发限流软墙 (2kdm/7sefun 实测),
+  // 相邻两集的解析启动至少错开 4 秒; 未到点则延迟重排队列
+  // ignore: prefer_final_fields
+  static DateTime _lastEpisodeStartAt =
+      DateTime.now().subtract(const Duration(hours: 1));
+  static const _episodeStartInterval = Duration(seconds: 4);
+  bool _pumpScheduled = false;
+
   void _processQueue() {
     while (_runningCount < maxParallelEpisodes && _queue.isNotEmpty) {
       final request = _queue.removeAt(0);
@@ -377,6 +385,20 @@ class DownloadManager implements IDownloadManager {
         _activeTasks.remove(key);
         continue;
       }
+
+      final sinceLast = DateTime.now().difference(_lastEpisodeStartAt);
+      if (sinceLast < _episodeStartInterval) {
+        _queue.insert(0, request);
+        if (!_pumpScheduled) {
+          _pumpScheduled = true;
+          Future.delayed(_episodeStartInterval - sinceLast, () {
+            _pumpScheduled = false;
+            _processQueue();
+          });
+        }
+        return;
+      }
+      _lastEpisodeStartAt = DateTime.now();
 
       _runningCount++;
       _runEpisodeDownload(

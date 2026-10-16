@@ -36,9 +36,6 @@ class WebViewVideoSourceService implements IVideoSourceService {
 
   static final RegExp _playerConfigRe =
       RegExp(r'player_aaaa\s*=\s*(\{[^}]*\})');
-  static final RegExp _rawMediaRe =
-      RegExp('https?://[^\\s"\'<>\\\\]+?\\.(?:m3u8|mp4)[^\\s"\'<>\\\\]*');
-
   /// 从播放页 HTML 提取明文媒体直链; 无把握一律返回 null 走 WebView
   Future<VideoSource?> _tryDirectResolve(String episodeUrl) async {
     final host = Uri.tryParse(episodeUrl)?.host ?? '';
@@ -70,8 +67,6 @@ class WebViewVideoSourceService implements IVideoSourceService {
         }
       } catch (_) {}
     }
-    // 2. 页面裸媒体链接
-    mediaUrl ??= _rawMediaRe.firstMatch(html)?.group(0);
     if (mediaUrl == null ||
         !(mediaUrl.contains('.m3u8') || mediaUrl.contains('.mp4'))) {
       _directFailures.add(host);

@@ -178,7 +178,8 @@ class PlayerController implements Disposable {
     referer = params.referer;
 
     KazumiLogger().i(
-        'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}');
+        'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}, referer: ${params.referer}',
+        forceLog: true);
 
     playback.resetForInit();
     debug.playerLogLevel = GStorage.getSetting(SettingsKeys.playerLogLevel);

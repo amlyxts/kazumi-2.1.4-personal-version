@@ -196,6 +196,10 @@ class _CaptchaDialogState extends State<_CaptchaDialog> {
   bool _submitting = false;
   int _imageRevision = 0;
 
+  // 验证码自动识别 (方案A): 最多自动尝试 3 张图, 之后回落手动输入
+  int _autoAttempts = 0;
+  String _autoStatus = '';
+
   @override
   void initState() {
     super.initState();
@@ -229,6 +233,71 @@ class _CaptchaDialogState extends State<_CaptchaDialog> {
       _imageBytes = bytes;
       _imageError = bytes == null ? '验证码图片无法显示' : null;
     });
+    if (bytes != null) _autoSolve();
+  }
+
+  /// 验证码自动识别: OCR 当前图片并自动提交; 最多尝试 3 张图, 之后回落手动输入。
+  /// 提交后码错时站点不出新图, 由外层 8s 超时取消并重试检索 (新会话重新计数)。
+  Future<void> _autoSolve() async {
+    if (_submitting) return;
+    // 未启用/未配置不静默: 面板上明说原因, 用户才知道去哪配
+    if (!CaptchaOcrService.enabled) {
+      if (_autoStatus.isEmpty) {
+        setState(
+            () => _autoStatus = '验证码自动识别已在设置中关闭, 请手动输入');
+      }
+      return;
+    }
+    if (!CaptchaOcrService.configured) {
+      if (_autoStatus.isEmpty) {
+        setState(() =>
+            _autoStatus = '未配置 OCR 渠道密钥, 请手动输入 (网络设置 → 验证码自动识别)');
+      }
+      return;
+    }
+    if (_autoAttempts >= 3) {
+      if (_autoStatus.isNotEmpty) {
+        setState(() => _autoStatus = '');
+      }
+      _inputFocus.requestFocus();
+      return;
+    }
+    final bytes = _imageBytes;
+    if (bytes == null) return;
+    _autoAttempts++;
+    setState(() => _autoStatus = '自动识别中 (第 $_autoAttempts/3 次)…');
+    String? code;
+    try {
+      code = await CaptchaOcrService.solve(bytes);
+    } catch (_) {}
+    if (!mounted) return;
+    if (code == null) {
+      if (_autoAttempts >= 3) {
+        setState(() => _autoStatus = '自动识别未通过, 请手动输入');
+        _inputFocus.requestFocus();
+      } else {
+        _reload();
+      }
+      return;
+    }
+    await _submitWithCode(code);
+  }
+
+  Future<void> _submitWithCode(String code) async {
+    if (_submitting) return;
+    setState(() {
+      _submitting = true;
+      if (_autoStatus.isNotEmpty) _autoStatus = '已自动填入, 验证中…';
+    });
+    try {
+      await widget.onSubmit(code);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _inputError = '未能提交，请重试';
+      });
+    }
   }
 
   Future<void> _reload() async {
@@ -307,6 +376,15 @@ class _CaptchaDialogState extends State<_CaptchaDialog> {
             ),
             child: _buildImage(),
           ),
+          if (_autoStatus.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                _autoStatus,
+                style: theme.textTheme.labelMedium
+                    ?.copyWith(color: colors.onSurfaceVariant),
+              ),
+            ),
           if (_imageBytes != null) ...[
             Align(
               alignment: Alignment.centerRight,

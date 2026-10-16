@@ -2,6 +2,9 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <algorithm>
+#include <string>
+
 #include "flutter_window.h"
 #include "utils.h"
 
@@ -57,14 +60,13 @@ bool ActivateExistingWindow()
   return false;
 }
 
-bool isSingleInstance()
+bool isSingleInstance(const wchar_t* mutex_name)
 {
   if (mutex != NULL)
   {
     return true;
   }
-  std::wstring mutex_str = L"kazumi.win.mutex";
-  mutex = ::CreateMutex(NULL, TRUE, mutex_str.c_str());
+  mutex = ::CreateMutex(NULL, TRUE, mutex_name);
   if (mutex == NULL || GetLastError() == ERROR_ALREADY_EXISTS)
   {
     CloseHandle(mutex);
@@ -77,9 +79,19 @@ bool isSingleInstance()
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command)
 {
+  std::vector<std::string> command_line_arguments =
+      GetCommandLineArguments();
+
+  // QA driver mode (rule quality testing) runs headless alongside the
+  // resident instance, so it claims a dedicated mutex instead of the
+  // normal one, which would just activate the existing window.
+  const bool qa_mode =
+      std::find(command_line_arguments.begin(), command_line_arguments.end(),
+                "--qa-play") != command_line_arguments.end();
+
   // Make sure the application is a single instance.
   // This is important for the application to work correctly with the local storage.
-  if (!isSingleInstance())
+  if (!isSingleInstance(qa_mode ? L"kazumi.win.mutex.qa" : L"kazumi.win.mutex"))
   {
     // Try to activate the existing window instead of showing an error
     ActivateExistingWindow();
@@ -101,9 +113,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // Disable thread merge to improve performance
   // Attention: This may impact plugin performance and may be incompatible with future Flutter releases.
   project.set_ui_thread_policy(flutter::UIThreadPolicy::RunOnSeparateThread);
-
-  std::vector<std::string> command_line_arguments =
-      GetCommandLineArguments();
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 

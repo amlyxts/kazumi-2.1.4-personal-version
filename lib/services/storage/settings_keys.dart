@@ -57,6 +57,21 @@ class SettingsKeys {
     true,
     group: SettingGroup.misc,
   );
+  static const captchaOcrEnable = SettingKey<bool>(
+    _SettingBoxKey.captchaOcrEnable,
+    true,
+    group: SettingGroup.misc,
+  );
+  static const captchaOcrChannels = SettingKey<String>(
+    _SettingBoxKey.captchaOcrChannels,
+    '',
+    group: SettingGroup.misc,
+  );
+  static const customRuleRepoUrl = SettingKey<String>(
+    _SettingBoxKey.customRuleRepoUrl,
+    '',
+    group: SettingGroup.misc,
+  );
   static const autoUpdate = SettingKey<bool>(
     _SettingBoxKey.autoUpdate,
     true,
@@ -702,6 +717,9 @@ class _SettingBoxKey {
   static const String hAenable = 'hAenable',
       hardwareDecoder = 'hardwareDecoder',
       searchEnhanceEnable = 'searchEnhanceEnable',
+      captchaOcrEnable = 'captchaOcrEnable',
+      captchaOcrChannels = 'captchaOcrChannels',
+      customRuleRepoUrl = 'customRuleRepoUrl',
       autoUpdate = 'autoUpdate',
       alwaysOntop = 'alwaysOntop',
       defaultPlaySpeed = 'defaultPlaySpeed',

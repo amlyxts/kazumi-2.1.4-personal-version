@@ -36,6 +36,7 @@ class NetworkConfig {
     'cloudflarestorage.com',
     'bgmapi.com',
     'kazumi.fyi',
+    'gugu3.com',
   ];
 
   static bool _shouldProxyHost(String host) =>

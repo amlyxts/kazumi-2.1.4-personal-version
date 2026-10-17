@@ -647,10 +647,12 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
           ] else
             const Spacer(),
         ],
-        _menuButton(
-          child: const Text('超分辨率', style: TextStyle(color: Colors.white)),
-          items: _superResolutionItems,
-        ),
+        if (!kDisableSuperResolution)
+          _menuButton(
+            child:
+                const Text('超分辨率', style: TextStyle(color: Colors.white)),
+            items: _superResolutionItems,
+          ),
         _menuButton(
           child: Text(
               playerController.playback.playerSpeed == 1

@@ -293,13 +293,14 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                   initialValue: androidEnableOpenSLES,
                 ),
               ],
-              SettingsTile(
-                leading: Icons.auto_awesome_rounded,
-                onPressed: (_) async {
-                  context.pushNamed('/settings/player/super');
-                },
-                title: Text('超分辨率'),
-              ),
+              if (!kDisableSuperResolution)
+                SettingsTile(
+                  leading: Icons.auto_awesome_rounded,
+                  onPressed: (_) async {
+                    context.pushNamed('/settings/player/super');
+                  },
+                  title: Text('超分辨率'),
+                ),
             ],
           ),
           SettingsSection(

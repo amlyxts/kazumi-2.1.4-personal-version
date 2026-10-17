@@ -159,6 +159,11 @@ const List<String> mpvFSRCNNXShaders = ['FSRCNNX_x2_16_0_4_1.glsl'];
 // [my修改] 本地视频体系仅桌面端可用，iOS/Android 移动端不提供该功能
 final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
 
+// [my修改] 超分在 iOS 上禁用: Anime4K CNN 需 compute shader, iOS GLES 路径
+// 跑不动; FSRCNNX 高负载在 A 系芯片掉帧 (实机反馈效率档也卡)。入口隐藏 +
+// 启动强制 off, mpv 不再加载任何超分着色器。
+final bool kDisableSuperResolution = Platform.isIOS;
+
 // [my修改] 本地视频在历史记录中使用的虚拟插件名（adapterName），
 // 非空才能让 canRecord 为 true、进度得以持久化。
 const String localVideoPluginName = 'local';

@@ -277,6 +277,9 @@ abstract class _PlayerPlaybackController with Store {
     superResolutionMode = SuperResolutionMode.fromStorageValue(
       GStorage.getSetting(SettingsKeys.defaultSuperResolutionMode),
     );
+    if (kDisableSuperResolution) {
+      superResolutionMode = SuperResolutionMode.off;
+    }
     hAenable = GStorage.getSetting(SettingsKeys.hAenable);
     androidEnableOpenSLES =
         GStorage.getSetting(SettingsKeys.androidEnableOpenSLES);
@@ -493,6 +496,7 @@ abstract class _PlayerPlaybackController with Store {
   Future<void> setShader(SuperResolutionMode mode, {Player? player}) async {
     final currentPlayer = player ?? mediaPlayer;
     if (currentPlayer == null) return;
+    if (kDisableSuperResolution) return;
     try {
       var pp = currentPlayer.platform as NativePlayer;
       await pp.waitForPlayerInitialization;

@@ -181,6 +181,10 @@ Future<(Map<String, dynamic>, int)> _runQa(
 
   // 直链嗅探 (与应用播放同一条 WebView 解析链路)
   final service = WebViewVideoSourceService();
+  // [诊断] WebView 内部事件透传到 stdout (--qa-webview-log 常开, 便于定位解析卡点)
+  final logSub = service.onLog.listen((log) {
+    stdout.writeln('  [WebView] $log');
+  });
   VideoSource source;
   try {
     source = await service.resolve(
@@ -196,6 +200,7 @@ Future<(Map<String, dynamic>, int)> _runQa(
   } catch (e) {
     return (_fail('resolve', '直链嗅探失败: $e'), qaExitFailed);
   } finally {
+    await logSub.cancel();
     // 结果已确定, WebView 销毁不阻塞交付; exit() 兜底硬退出
     unawaited(
       service.dispose().timeout(const Duration(seconds: 5), onTimeout: () {}),

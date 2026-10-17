@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:kazumi/services/logging/logger.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 /// 渠道内的单个模型配置
@@ -173,7 +174,8 @@ class CaptchaOcrService {
   }
 
   /// 用户开关 (默认开); 所有渠道都没配 key 时视为功能不可用
-  static bool get enabled => GStorage.getSetting(SettingsKeys.captchaOcrEnable);
+  static bool get enabled =>
+      !kDisableCaptchaOcr && GStorage.getSetting(SettingsKeys.captchaOcrEnable);
 
   static bool get configured =>
       loadChannels().any((c) => c.apiKey.isNotEmpty);

@@ -164,6 +164,10 @@ final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
 // 启动强制 off, mpv 不再加载任何超分着色器。
 final bool kDisableSuperResolution = Platform.isIOS;
 
+// [my修改] 验证码 OCR 自动识别在 iOS 上禁用 (外部 OCR 渠道依赖 + 移动端 WebView
+// 截图链路不稳), 入口隐藏且服务端短路, 验证码回落手动输入。
+final bool kDisableCaptchaOcr = Platform.isIOS;
+
 // [my修改] 本地视频在历史记录中使用的虚拟插件名（adapterName），
 // 非空才能让 canRecord 为 true、进度得以持久化。
 const String localVideoPluginName = 'local';

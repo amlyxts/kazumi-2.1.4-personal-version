@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/bean/settings/network_mirror_settings.dart';
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
 import 'package:kazumi/bean/settings/settings_list.dart';
@@ -52,6 +53,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
       body: SettingsList(
         sections: [
           const NetworkMirrorSettings(),
+          if (!kDisableCaptchaOcr)
           SettingsSection(
             title: const Text('验证码自动识别'),
             tiles: [

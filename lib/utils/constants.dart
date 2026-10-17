@@ -156,6 +156,20 @@ const List<String> mpvAnime4KShadersLite = [
 const List<String> mpvFSRCNNXShadersLite = ['FSRCNNX_x2_8_0_4_1.glsl'];
 const List<String> mpvFSRCNNXShaders = ['FSRCNNX_x2_16_0_4_1.glsl'];
 
+// [my修改] ArtCNN: 专为动漫线稿训练的 CNN 超分 (2024+ 社区新秀, 线稿干净度
+// 超过 Anime4K v4 / FSRCNNX), x2 放大后由 mpv 缩放至屏幕分辨率。
+// C4F32 = 高精度权重档, 建议 GTX 1660 / RX 6600 级以上, 1080p 输出中档卡即可流畅。
+const List<String> mpvArtCNNShaders = ['ArtCNN_C4F32.glsl'];
+
+/// [my修改] 画质增强三件套 (agyild/Shiandow 系): KrigBilateral 色度升采样 +
+/// SSimSuperRes 感知超分 (比 FSRCNNX 少振铃) + SSimDownscaler 高质量降采样。
+/// 组合对老番/颗粒源友好, 均为 hook 型着色器, 中档 GPU 可流畅运行。
+const List<String> mpvEnhanceShaders = [
+  'KrigBilateral.glsl',
+  'SSimSuperRes.glsl',
+  'SSimDownscaler.glsl',
+];
+
 // [my修改] 本地视频体系仅桌面端可用，iOS/Android 移动端不提供该功能
 final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
 

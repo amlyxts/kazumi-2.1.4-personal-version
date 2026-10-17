@@ -76,6 +76,18 @@ class CreditsPage extends StatelessWidget {
                   url: 'https://github.com/bloc97/Anime4K',
                 ),
                 AboutLinkTile(
+                  icon: Icons.auto_awesome_rounded,
+                  title: 'ArtCNN',
+                  subtitle: '动漫专用 CNN 超分辨率',
+                  url: 'https://github.com/Artoriuz/ArtCNN',
+                ),
+                AboutLinkTile(
+                  icon: Icons.auto_awesome_rounded,
+                  title: 'KrigBilateral / SSim 系列',
+                  subtitle: '画质增强着色器 (by Shiandow)',
+                  url: 'https://github.com/iwalton3/default-shader-pack',
+                ),
+                AboutLinkTile(
                   icon: Icons.sync_rounded,
                   title: 'Syncplay',
                   subtitle: '播放同步',

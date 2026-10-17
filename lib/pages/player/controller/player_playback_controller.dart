@@ -546,6 +546,29 @@ abstract class _PlayerPlaybackController with Store {
             ),
           ]);
           break;
+        // [my修改] 动漫专用新档: ArtCNN 超质 + 感知画质增强三件套
+        case SuperResolutionMode.artcnn:
+          await pp.command([
+            'change-list',
+            'glsl-shaders',
+            'set',
+            buildShadersAbsolutePath(
+              shaderAssetService.shadersDirectory.path,
+              mpvArtCNNShaders,
+            ),
+          ]);
+          break;
+        case SuperResolutionMode.enhance:
+          await pp.command([
+            'change-list',
+            'glsl-shaders',
+            'set',
+            buildShadersAbsolutePath(
+              shaderAssetService.shadersDirectory.path,
+              mpvEnhanceShaders,
+            ),
+          ]);
+          break;
         case SuperResolutionMode.off:
           await pp.command(['change-list', 'glsl-shaders', 'clr', '']);
           break;

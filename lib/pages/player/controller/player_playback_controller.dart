@@ -454,6 +454,15 @@ abstract class _PlayerPlaybackController with Store {
         SettingsKeys.playerDebandEnable,
       );
       await pp.setProperty('deband', debandEnable ? 'yes' : 'no');
+      // [my修改] 运动补偿: 帧时钟对齐刷新率, 消除 24fps 源的规律性顿挫
+      // (120Hz=5x24 整数倍屏收益最大; tscale 用 mpv 默认 oversample, 无鬼影)。
+      final bool motionCompensationEnable = GStorage.getSetting(
+        SettingsKeys.playerMotionCompensationEnable,
+      );
+      await pp.setProperty('video-sync',
+          motionCompensationEnable ? 'display-resample' : 'audio');
+      await pp.setProperty(
+          'interpolation', motionCompensationEnable ? 'yes' : 'no');
       if (!isCurrentPlayer(player)) {
         return await _discardIfNotCurrent(candidate);
       }

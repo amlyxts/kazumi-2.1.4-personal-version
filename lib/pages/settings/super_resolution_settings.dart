@@ -15,6 +15,7 @@ class SuperResolutionSettings extends StatefulWidget {
 class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
   late bool disableWarning;
   late bool debandEnable;
+  late bool motionCompensationEnable;
   late SuperResolutionMode superResolutionMode;
 
   @override
@@ -25,6 +26,9 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
     );
     debandEnable = GStorage.getSetting<bool>(
       SettingsKeys.playerDebandEnable,
+    );
+    motionCompensationEnable = GStorage.getSetting<bool>(
+      SettingsKeys.playerMotionCompensationEnable,
     );
     superResolutionMode = SuperResolutionMode.fromStorageValue(
       GStorage.getSetting<int>(SettingsKeys.defaultSuperResolutionMode),
@@ -72,6 +76,21 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
                   await GStorage.putSetting<bool>(
                     SettingsKeys.playerDebandEnable,
                     debandEnable,
+                  );
+                  if (mounted) setState(() {});
+                },
+              ),
+              SettingsTile.switchTile(
+                leading: Icons.motion_photos_on_rounded,
+                title: Text('运动补偿'),
+                description: Text(
+                    '帧时钟对齐刷新率, 消除 24fps 源的横移顿挫 (非补帧); 120Hz 屏收益最大 (5x24 整数倍), 200Hz 屏看番建议切 120Hz, 下次播放生效'),
+                initialValue: motionCompensationEnable,
+                onToggle: (value) async {
+                  motionCompensationEnable = value ?? !motionCompensationEnable;
+                  await GStorage.putSetting<bool>(
+                    SettingsKeys.playerMotionCompensationEnable,
+                    motionCompensationEnable,
                   );
                   if (mounted) setState(() {});
                 },

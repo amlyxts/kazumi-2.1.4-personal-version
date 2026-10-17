@@ -514,6 +514,13 @@ class SettingsKeys {
     false,
     group: SettingGroup.player,
   );
+  // [my修改] 运动补偿 (display-resample + interpolation): 消除 24fps 源在
+  // 非整数倍刷新率屏上的顿挫; 120Hz(=5x24) 屏收益最大, 非"补帧"。
+  static const playerMotionCompensationEnable = SettingKey<bool>(
+    'playerMotionCompensationEnable',
+    false,
+    group: SettingGroup.player,
+  );
   static const downloadParallelSegments = SettingKey<int>(
     _SettingBoxKey.downloadParallelSegments,
     3,

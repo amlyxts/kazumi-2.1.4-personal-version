@@ -168,6 +168,10 @@ final bool kDisableSuperResolution = Platform.isIOS;
 // 截图链路不稳), 入口隐藏且服务端短路, 验证码回落手动输入。
 final bool kDisableCaptchaOcr = Platform.isIOS;
 
+// [my修改] 去色带 deband 在 iOS 上禁用 (开关随超分设置页一并隐藏, 此门控
+// 防存量配置在启动时生效), 低清片源色带交给源站画质本身。
+final bool kDisablePlayerDeband = Platform.isIOS;
+
 // [my修改] 本地视频在历史记录中使用的虚拟插件名（adapterName），
 // 非空才能让 canRecord 为 true、进度得以持久化。
 const String localVideoPluginName = 'local';

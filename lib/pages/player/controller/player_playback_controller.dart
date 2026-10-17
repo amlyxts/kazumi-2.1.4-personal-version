@@ -453,9 +453,9 @@ abstract class _PlayerPlaybackController with Store {
       }
 
       // [my修改] deband 去色带：低清/老片源建议开启，下次播放生效
-      final bool debandEnable = GStorage.getSetting(
-        SettingsKeys.playerDebandEnable,
-      );
+      // (iOS 禁用, 见 kDisablePlayerDeband)
+      final bool debandEnable = !kDisablePlayerDeband &&
+          GStorage.getSetting(SettingsKeys.playerDebandEnable);
       await pp.setProperty('deband', debandEnable ? 'yes' : 'no');
       if (!isCurrentPlayer(player)) {
         return await _discardIfNotCurrent(candidate);

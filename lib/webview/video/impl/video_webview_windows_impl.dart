@@ -24,6 +24,18 @@ class VideoWebviewWindowsImpl
   Future<void> _setupProxy() async {
     final bool proxyEnable = GStorage.getSetting(SettingsKeys.proxyEnable);
     if (!proxyEnable) {
+      // [my修改] 应用代理关闭时显式禁用 WebView2 的系统代理解析:
+      // WebView2 (Edge) 默认遵循系统代理——代理软件 (Clash) 的出口访问部分
+      // 国内源站会失败 (dm84.tv 实测: 直连 0.5s / 经 Clash 必挂), 导致解析超时。
+      // --no-proxy-server 让解析 WebView 与 dio 的直连行为一致。
+      try {
+        await WebviewController.initializeEnvironment(
+          additionalArguments: '--no-proxy-server',
+        );
+        KazumiLogger().i('WebView: 已禁用系统代理解析 (直连模式)');
+      } catch (e) {
+        KazumiLogger().e('WebView: 设置直连模式失败 $e');
+      }
       return;
     }
 

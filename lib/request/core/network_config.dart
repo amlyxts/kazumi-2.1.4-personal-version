@@ -32,7 +32,8 @@ class NetworkConfig {
   /// Intentionally does not include bangumi API hosts (api.bgm.tv/next.bgm.tv) —
   /// those go through the acceleration channel (in ECH mode, proxying would defeat ECH's purpose).
   static const List<String> _proxyWhitelistHosts = [
-    'dandanplay.com',
+    // [my修改] dandanplay.com 已移出: 国内 Azure 节点直连稳定 (~0.38s, 走代理 4.6s
+    // 且依赖 Clash 存活), 2026-10-17 实测定案。若运营商直连劣化再加回。
     'cloudflarestorage.com',
     'bgmapi.com',
     'kazumi.fyi',

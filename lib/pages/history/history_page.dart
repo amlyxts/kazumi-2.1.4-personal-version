@@ -180,9 +180,12 @@ class _HistoryCardState extends State<_HistoryCard> with KazumiDialogOwner {
   final HistoryPlaybackService _playbackService =
       inject<HistoryPlaybackService>();
   bool _updatingCollect = false;
+  // [my修改] 标记本次播放尝试发现源文件已丢失，待 loading 任务结束后询问清理
+  bool _pendingStaleCleanup = false;
 
   Future<void> _play() async {
     if (widget.editing || widget.busy || dialogs.isRunning) return;
+    _pendingStaleCleanup = false;
     await dialogs.run((task) async {
       final cancelToken = RuleCancelToken();
       final result = await task.loading(
@@ -198,8 +201,39 @@ class _HistoryCardState extends State<_HistoryCard> with KazumiDialogOwner {
               (context) => context.pushNamed('/video/', arguments: args));
         case HistoryPlaybackUnavailable(:final reason):
           KazumiDialog.showToast(message: reason);
+        case HistoryPlaybackStale(:final reason):
+          // [my修改] 本地源文件已不存在
+          KazumiDialog.showToast(message: reason);
+          _pendingStaleCleanup = true;
       }
     }, errorMessage: '暂时无法继续播放，请稍后重试');
+    if (_pendingStaleCleanup) {
+      _pendingStaleCleanup = false;
+      _confirmDeleteStaleHistory();
+    }
+  }
+
+  /// [my修改] 源文件已不在磁盘上，询问是否顺手删除这条死历史
+  void _confirmDeleteStaleHistory() {
+    KazumiDialog.show(
+      builder: (context) => AlertDialog(
+        title: const Text('删除历史记录'),
+        content: const Text('本地文件已不存在，是否删除这条历史记录？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              widget.onDelete();
+            },
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _changeCollect(CollectType type) async {

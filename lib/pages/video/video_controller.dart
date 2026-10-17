@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/modules/roads/road_module.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
@@ -19,6 +20,8 @@ import 'package:kazumi/modules/comments/comment_item.dart';
 import 'package:kazumi/modules/comments/comment_response.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/utils/constants.dart';
+import 'package:kazumi/utils/local_video_utils.dart';
 import 'package:kazumi/utils/episode_url.dart';
 import 'package:kazumi/utils/http_headers.dart';
 import 'package:kazumi/utils/media.dart';
@@ -123,6 +126,9 @@ abstract class _VideoPageController with Store implements Disposable {
   @observable
   bool isOfflineMode = false;
 
+  // [my修改] 复用离线播放管线，但路径来自文件选择器而非下载仓库
+  bool _isLocalFileMode = false;
+
   PlaybackHistoryIdentity? _playbackHistoryIdentity;
   final Map<int, DownloadEpisode> _offlineEpisodesByNumber = {};
   final Map<int, int> _offlineDisplayRoadToOriginalRoad = {};
@@ -172,6 +178,12 @@ abstract class _VideoPageController with Store implements Disposable {
           road: args.road,
           downloadedEpisodes: args.downloadedEpisodes,
         );
+      case LocalVideoPlaybackArgs():
+        _initForLocalFilePlayback(
+          bangumiItem: args.bangumiItem,
+          filePaths: args.filePaths,
+          startEpisode: args.startEpisode,
+        );
     }
   }
 
@@ -188,6 +200,7 @@ abstract class _VideoPageController with Store implements Disposable {
     title =
         bangumiItem.nameCn.isNotEmpty ? bangumiItem.nameCn : bangumiItem.name;
     isOfflineMode = true;
+    _isLocalFileMode = false;
     _loading = false;
 
     _buildOfflineRoadList(downloadedEpisodes);
@@ -214,6 +227,64 @@ abstract class _VideoPageController with Store implements Disposable {
     }
     KazumiLogger().i(
         'VideoPageController: initialized for offline playback, episode $episodeNumber (position: ${selected.episode})');
+  }
+
+  /// [my修改] 用本地视频文件伪造一份离线剧集列表，复用下载播放管线。
+  /// [filePaths] 为磁盘上真实存在的视频绝对路径；[startEpisode] 从 1 开始。
+  void _initForLocalFilePlayback({
+    required BangumiItem bangumiItem,
+    required List<String> filePaths,
+    int startEpisode = 1,
+  }) {
+    this.bangumiItem = bangumiItem;
+    title =
+        bangumiItem.nameCn.isNotEmpty ? bangumiItem.nameCn : bangumiItem.name;
+    isOfflineMode = true;
+    _isLocalFileMode = true;
+    _offlinePluginName = localVideoPluginName;
+    _loading = false;
+
+    final episodes = <DownloadEpisode>[];
+    for (var i = 0; i < filePaths.length; i++) {
+      final path = filePaths[i];
+      episodes.add(DownloadEpisode(
+        i + 1,
+        localFileDisplayName(path),
+        0,
+        DownloadStatus.completed,
+        100,
+        1,
+        1,
+        path, // localM3u8Path：mpv 直接读取的绝对路径
+        '',
+        '',
+        null,
+        '',
+        0,
+        path, // episodePageUrl：历史续播时反查源文件的依据
+      ));
+    }
+
+    _buildOfflineRoadList(episodes);
+
+    final target =
+        _findOfflineEpisodeByNumber(startEpisode, preferredOriginalRoad: 0);
+    final selected = VideoEpisodeSelection(
+      episode: target?.listIndex ?? 1,
+      road: target?.roadIndex ?? 0,
+    );
+    selectedEpisode = selected;
+    playingEpisode = null;
+    commentsEpisode = commentEpisodeForSelection(selected);
+    final resolvedEpisode =
+        _resolveOfflineEpisode(selected.episode, road: selected.road);
+    if (resolvedEpisode != null) {
+      _setOfflineHistoryIdentity(resolvedEpisode);
+    } else {
+      _playbackHistoryIdentity = null;
+    }
+    KazumiLogger().i(
+        'VideoPageController: initialized for local file playback, ${filePaths.length} file(s), start episode $startEpisode');
   }
 
   void _buildOfflineRoadList(List<DownloadEpisode> episodes) {
@@ -245,7 +316,7 @@ abstract class _VideoPageController with Store implements Disposable {
     final preferredDisplayRoad =
         _offlineOriginalRoadToDisplayRoad[preferredOriginalRoad];
     final roadIndices = <int>[
-      if (preferredDisplayRoad != null) preferredDisplayRoad,
+      ?preferredDisplayRoad,
       for (var i = 0; i < roadList.length; i++)
         if (i != preferredDisplayRoad) i,
     ];
@@ -488,14 +559,27 @@ abstract class _VideoPageController with Store implements Disposable {
       return;
     }
 
-    final localPath = _getLocalVideoPath(
-      bangumiItem.id,
-      _offlinePluginName,
-      resolvedEpisode.historyEpisodeNumber,
-    );
-    if (localPath == null) {
-      _failLoading('该集数未下载');
-      return;
+    // [my修改] 本地模式直接用伪造剧集携带的路径，绕过下载仓库查询
+    String? localPath;
+    if (_isLocalFileMode) {
+      final localEpisode =
+          _offlineEpisodesByNumber[resolvedEpisode.historyEpisodeNumber];
+      final path = localEpisode?.localM3u8Path ?? '';
+      localPath = path.isNotEmpty && File(path).existsSync() ? path : null;
+      if (localPath == null) {
+        _failLoading('该集文件不存在');
+        return;
+      }
+    } else {
+      localPath = _getLocalVideoPath(
+        bangumiItem.id,
+        _offlinePluginName,
+        resolvedEpisode.historyEpisodeNumber,
+      );
+      if (localPath == null) {
+        _failLoading('该集数未下载');
+        return;
+      }
     }
     _applyResolvedSelection(resolvedEpisode);
     _setOfflineHistoryIdentity(resolvedEpisode);
@@ -532,7 +616,12 @@ abstract class _VideoPageController with Store implements Disposable {
     final initialized = await playerController.init(params);
     if (session.isActive && initialized) {
       playingEpisode = selection;
-      unawaited(_loadPlaybackDanmaku(playerController, params, session));
+      if (_isLocalFileMode) {
+        // [my修改] v1 不做自动弹幕：静默关闭加载态，手动检索弹幕仍可用
+        playerController.danmaku.finishDanmakuLoad(disableDanmaku: true);
+      } else {
+        unawaited(_loadPlaybackDanmaku(playerController, params, session));
+      }
     } else if (session.isActive) {
       _playbackSessions.cancel();
     }

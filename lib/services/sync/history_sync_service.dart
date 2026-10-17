@@ -10,6 +10,7 @@ import 'package:kazumi/modules/history/history_sync.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/history_storage_coordinator.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/utils/async_serial_queue.dart';
 
 class HistorySyncService {
@@ -197,7 +198,11 @@ class HistorySyncService {
 
   Future<void> _applySnapshotToLocal(HistorySyncSnapshot snapshot) async {
     final historiesByKey = {
-      for (final history in snapshot.histories) history.key: history,
+      // [my修改] 移动端不接收本地视频历史条目（无此功能，过滤为脏数据）
+      for (final history in snapshot.histories)
+        if (kSupportsLocalVideo ||
+            history.adapterName != localVideoPluginName)
+          history.key: history,
     };
     final staleKeys = GStorage.histories.keys
         .where((key) => !historiesByKey.containsKey(key))

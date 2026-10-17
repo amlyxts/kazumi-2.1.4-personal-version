@@ -449,6 +449,15 @@ abstract class _PlayerPlaybackController with Store {
         }
       }
 
+      // [my修改] deband 去色带：低清/老片源建议开启，下次播放生效
+      final bool debandEnable = GStorage.getSetting(
+        SettingsKeys.playerDebandEnable,
+      );
+      await pp.setProperty('deband', debandEnable ? 'yes' : 'no');
+      if (!isCurrentPlayer(player)) {
+        return await _discardIfNotCurrent(candidate);
+      }
+
       if (videoSourceFormat == VideoSourceFormat.hls) {
         await pp.setProperty('demuxer-lavf-format', 'hls');
         if (!isCurrentPlayer(player)) {
@@ -511,6 +520,29 @@ abstract class _PlayerPlaybackController with Store {
             buildShadersAbsolutePath(
               shaderAssetService.shadersDirectory.path,
               mpvAnime4KShaders,
+            ),
+          ]);
+          break;
+        // [my修改] FSRCNNX 实拍超分两档
+        case SuperResolutionMode.fsrcnnxEfficiency:
+          await pp.command([
+            'change-list',
+            'glsl-shaders',
+            'set',
+            buildShadersAbsolutePath(
+              shaderAssetService.shadersDirectory.path,
+              mpvFSRCNNXShadersLite,
+            ),
+          ]);
+          break;
+        case SuperResolutionMode.fsrcnnxQuality:
+          await pp.command([
+            'change-list',
+            'glsl-shaders',
+            'set',
+            buildShadersAbsolutePath(
+              shaderAssetService.shadersDirectory.path,
+              mpvFSRCNNXShaders,
             ),
           ]);
           break;

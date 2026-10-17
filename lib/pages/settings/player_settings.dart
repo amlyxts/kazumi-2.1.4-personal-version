@@ -454,9 +454,9 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                 leading: Icons.speed_rounded,
                 title: Text('默认倍速'),
                 value: defaultPlaySpeed,
-                min: 0.25,
-                max: 3,
-                divisions: 11,
+                min: 0.5,
+                max: 5,
+                divisions: 18,
                 valueLabel: '${defaultPlaySpeed}x',
                 onChanged: (value) => updateDefaultPlaySpeed(
                     double.parse(value.toStringAsFixed(2))),

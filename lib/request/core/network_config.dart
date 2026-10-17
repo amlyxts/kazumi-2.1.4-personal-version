@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:dio/io.dart';
+import 'package:kazumi/request/config/api_endpoints.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/network/proxy_utils.dart';
 import 'package:kazumi/services/network/system_proxy_service.dart';
@@ -27,7 +28,28 @@ class NetworkConfig {
 
   bool get hasProxy => proxyHost != null && proxyPort != null;
 
+  /// [my modification] Proxy whitelist: only domains that must go through proxy get the proxy; video sources/rules etc. always connect directly.
+  /// Intentionally does not include bangumi API hosts (api.bgm.tv/next.bgm.tv) —
+  /// those go through the acceleration channel (in ECH mode, proxying would defeat ECH's purpose).
+  static const List<String> _proxyWhitelistHosts = [
+    'dandanplay.com',
+    'cloudflarestorage.com',
+    'bgmapi.com',
+    'kazumi.fyi',
+    'gugu3.com',
+  ];
+
+  static bool _shouldProxyHost(String host) =>
+      _proxyWhitelistHosts.any((h) => host.contains(h));
+
   Uri? proxyForUri(Uri uri) {
+    // [my modification] Bangumi API hosts go through the acceleration channel (direct/ECH), do not take the whitelist proxy
+    if (ApiEndpoints.bangumiPublicApiHosts.contains(uri.host)) {
+      return null;
+    }
+    if (!_shouldProxyHost(uri.host)) {
+      return null;
+    }
     if (hasProxy) return Uri(scheme: 'http', host: proxyHost, port: proxyPort);
     if (Platform.isWindows) {
       final proxy = SystemProxyService.findProxy(uri);
@@ -42,11 +64,25 @@ class NetworkConfig {
     return IOHttpClientAdapter(
       createHttpClient: () {
         final client = HttpClient();
-        if (hasProxy) {
-          client.findProxy = (_) => 'PROXY $proxyHost:$proxyPort';
-        } else if (Platform.isWindows) {
-          client.findProxy = SystemProxyService.findProxy;
-        }
+        client.findProxy = (uri) {
+          // [my modification] Same filtering as proxyForUri: only whitelisted domains go through proxy
+          if (ApiEndpoints.bangumiPublicApiHosts.contains(uri.host)) {
+            return 'DIRECT';
+          }
+          if (!_shouldProxyHost(uri.host)) {
+            return 'DIRECT';
+          }
+          if (hasProxy) {
+            return 'PROXY $proxyHost:$proxyPort';
+          }
+          if (Platform.isWindows) {
+            final proxy = SystemProxyService.findProxy(uri);
+            if (proxy.startsWith('PROXY ')) {
+              return proxy;
+            }
+          }
+          return 'DIRECT';
+        };
         if (allowBadCertificates) {
           client.badCertificateCallback = (cert, host, port) => true;
         }

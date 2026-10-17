@@ -6,6 +6,7 @@ import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
 import 'package:kazumi/navigation.dart';
 import 'package:kazumi/pages/menu/route_visibility.dart';
 import 'package:kazumi/pages/router.dart';
+import 'package:kazumi/utils/constants.dart';
 
 class ScaffoldMenu extends StatefulWidget {
   const ScaffoldMenu({super.key, required this.location});
@@ -140,7 +141,8 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
     return Scaffold(
       body: _outlet(context),
       bottomNavigationBar: NavigationBar(
-        destinations: const <Widget>[
+        // [my修改] 本地视频页签仅桌面端 (kSupportsLocalVideo), 故列表去 const
+        destinations: <Widget>[
           NavigationDestination(
             selectedIcon: Icon(Icons.home),
             icon: Icon(Icons.home_outlined),
@@ -156,6 +158,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             icon: Icon(Icons.favorite_outlined),
             label: '追番',
           ),
+          // [my修改] 本地视频页签仅桌面端
+          if (kSupportsLocalVideo)
+            NavigationDestination(
+              selectedIcon: Icon(Icons.video_library),
+              icon: Icon(Icons.video_library_outlined),
+              label: '本地视频',
+            ),
           NavigationDestination(
             selectedIcon: Icon(Icons.settings),
             icon: Icon(Icons.settings),
@@ -188,7 +197,8 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                 child: const Icon(Icons.search),
               ),
               labelType: NavigationRailLabelType.selected,
-              destinations: const <NavigationRailDestination>[
+              // [my修改] 本地视频页签仅桌面端, 列表去 const
+              destinations: <NavigationRailDestination>[
                 NavigationRailDestination(
                   selectedIcon: Icon(Icons.home),
                   icon: Icon(Icons.home_outlined),
@@ -204,6 +214,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                   icon: Icon(Icons.favorite_border),
                   label: Text('追番'),
                 ),
+                // [my修改] 本地视频页签仅桌面端
+                if (kSupportsLocalVideo)
+                  NavigationRailDestination(
+                    selectedIcon: Icon(Icons.video_library),
+                    icon: Icon(Icons.video_library_outlined),
+                    label: Text('本地视频'),
+                  ),
                 NavigationRailDestination(
                   selectedIcon: Icon(Icons.settings),
                   icon: Icon(Icons.settings_outlined),

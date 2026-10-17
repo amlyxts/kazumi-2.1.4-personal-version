@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
@@ -11,6 +12,8 @@ import 'package:kazumi/bean/widget/loading_indicator.dart';
 import 'package:kazumi/bean/widget/state_presentation.dart';
 import 'package:kazumi/modules/plugin/plugin_http_module.dart';
 import 'package:kazumi/pages/plugin_editor/plugin_update_actions.dart';
+import 'package:kazumi/request/apis/plugin_catalog_api.dart';
+import 'package:kazumi/services/plugin/rule_llm_audit_service.dart';
 import 'package:kazumi/pages/plugin_editor/rule_management_widgets.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -50,11 +53,16 @@ class _PluginCatalogViewState extends State<PluginCatalogView> {
   bool _loading = true;
   bool _loadFailed = false;
 
+  // [my修改] 仓库切换: 打开页面默认官方仓库, 切到自定义仓库按需加载
+  List<RuleRepo> _repos = [];
+  String? _selectedRepoBase;
+
   PluginsController get _controller => widget.controller;
 
   @override
   void initState() {
     super.initState();
+    _repos = PluginCatalogApi.listRepos();
     if (_controller.isPluginCatalogFresh) {
       _loading = false;
     } else {
@@ -91,6 +99,33 @@ class _PluginCatalogViewState extends State<PluginCatalogView> {
     }
   }
 
+  Future<void> _switchRepo(RuleRepo? repo) async {
+    final targetBase = repo?.base;
+    final targetName = repo?.name ?? '官方仓库';
+    if (_selectedRepoBase == targetBase) return;
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
+    try {
+      await _controller.switchCatalogForRepo(targetBase, targetName);
+      if (mounted) {
+        setState(() {
+          _selectedRepoBase = targetBase;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadFailed = true;
+        });
+        KazumiDialog.showToast(message: '切换到「$targetName」失败, 请检查仓库地址或网络');
+      }
+    }
+  }
+
   void _refresh() {
     if (_loading) return;
     setState(() {
@@ -110,11 +145,108 @@ class _PluginCatalogViewState extends State<PluginCatalogView> {
     }
   }
 
+  /// [my修改] 第三方仓库的高危规则安装确认: 目录条目带 antiCrawlerEnabled
+  /// (自定义 JS 验证脚本类) 且来自自定义仓库时, 先拉规则全文做 LLM 审查,
+  /// 对话框展示 AI 判定与证据引用后由用户决定。
+  /// 官方仓库规则不弹 (作者已审), 但同类规则仍建议用测试器 --audit 复核。
+  Future<bool> _confirmRiskyInstall(PluginHTTPItem item) async {
+    if (item.sourceBase.isEmpty || !item.antiCrawlerEnabled) return true;
+    final theme = Theme.of(context);
+    RuleLlmAuditResult? audit;
+    var auditing = RuleLlmAuditService.configured;
+    if (auditing) {
+      // 拉规则全文交给 LLM 审 (失败/无渠道则 auditing=false, 仅静态提示)
+      try {
+        final plugin = await PluginCatalogApi.getPlugin(item.name,
+            base: item.sourceBase);
+        audit = await RuleLlmAuditService.audit(json.encode(plugin.toJson()));
+      } catch (_) {
+        auditing = false;
+      }
+    }
+    if (!mounted) return false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          scrollable: true,
+          title: Text(audit?.malicious == true
+              ? 'AI 审查: 疑似恶意规则'
+              : '安装含验证脚本的规则?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '「${item.name}」来自自定义仓库, 带有反爬验证配置。'
+                '若其为"自定义脚本"型 (captchaType 3), 安装后规则提供的 '
+                'JavaScript 将在应用的 WebView 中执行。',
+                style: theme.textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 12),
+              if (audit != null) ...[
+                Text(
+                  audit.malicious
+                      ? 'AI 判定: 恶意 (建议拒绝安装)'
+                      : audit.suspicious
+                          ? 'AI 判定: 可疑 (请人工核实)'
+                          : 'AI 判定: 良性',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: audit.malicious
+                        ? theme.colorScheme.error
+                        : audit.suspicious
+                            ? theme.colorScheme.tertiary
+                            : theme.colorScheme.primary,
+                  ),
+                ),
+                if (audit.summary.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(audit.summary,
+                      style: theme.textTheme.bodySmall),
+                ],
+                for (final f in audit.findings.take(4)) ...[
+                  const SizedBox(height: 8),
+                  Text('• \${f.risk}', style: theme.textTheme.bodySmall),
+                  if (f.evidence.isNotEmpty)
+                    Text('  证据: \${f.evidence}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontFamily: 'monospace')),
+                ],
+              ] else if (auditing) ...[
+                const Center(child: CircularProgressIndicator()),
+              ] else ...[
+                Text('(未配置审查渠道, 无法 AI 审读; 可在 网络设置→验证码自动识别 配置)',
+                    style: theme.textTheme.bodySmall),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(audit?.malicious == true ? '拒绝' : '取消'),
+            ),
+            FilledButton(
+              style: audit?.malicious == true
+                  ? FilledButton.styleFrom(
+                      backgroundColor: theme.colorScheme.error)
+                  : null,
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(audit?.malicious == true ? '仍要安装' : '仍然安装'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return ok == true;
+  }
+
   Future<void> _install(
       PluginHTTPItem item, PluginCatalogItemStatus status) async {
     if (!_installing.add(item.name)) return;
     setState(() {});
     try {
+      if (!await _confirmRiskyInstall(item)) return;
       await updatePluginWithFeedback(_controller, item.name,
           installing: status == PluginCatalogItemStatus.install);
     } finally {
@@ -185,6 +317,24 @@ class _PluginCatalogViewState extends State<PluginCatalogView> {
                       icon: const Icon(Icons.close_rounded))),
         ),
         const SizedBox(height: 12),
+        if (_repos.isNotEmpty) ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              FilterChip(
+                  label: const Text('官方仓库'),
+                  selected: _selectedRepoBase == null,
+                  onSelected: (_) => _switchRepo(null)),
+              for (final repo in _repos)
+                FilterChip(
+                    label: Text(repo.name),
+                    selected: _selectedRepoBase == repo.base,
+                    onSelected: (_) => _switchRepo(repo)),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
         Wrap(
           spacing: 8,
           runSpacing: 4,

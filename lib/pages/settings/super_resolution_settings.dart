@@ -14,6 +14,7 @@ class SuperResolutionSettings extends StatefulWidget {
 
 class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
   late bool disableWarning;
+  late bool debandEnable;
   late SuperResolutionMode superResolutionMode;
 
   @override
@@ -21,6 +22,9 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
     super.initState();
     disableWarning = GStorage.getSetting<bool>(
       SettingsKeys.disableSuperResolutionWarning,
+    );
+    debandEnable = GStorage.getSetting<bool>(
+      SettingsKeys.playerDebandEnable,
     );
     superResolutionMode = SuperResolutionMode.fromStorageValue(
       GStorage.getSetting<int>(SettingsKeys.defaultSuperResolutionMode),
@@ -53,6 +57,25 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
                   description: Text(mode.description),
                   radioValue: mode,
                 ),
+            ],
+          ),
+          SettingsSection(
+            title: Text('画质增强'),
+            tiles: [
+              SettingsTile.switchTile(
+                leading: Icons.auto_awesome_rounded,
+                title: Text('去色带 (deband)'),
+                description: Text('低清/老片源建议开启, 下次播放生效'),
+                initialValue: debandEnable,
+                onToggle: (value) async {
+                  debandEnable = value ?? !debandEnable;
+                  await GStorage.putSetting<bool>(
+                    SettingsKeys.playerDebandEnable,
+                    debandEnable,
+                  );
+                  if (mounted) setState(() {});
+                },
+              ),
             ],
           ),
           SettingsSection(

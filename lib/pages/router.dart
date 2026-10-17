@@ -1,3 +1,5 @@
+import 'package:kazumi/utils/constants.dart';
+
 class MenuRouteItem {
   const MenuRouteItem({required this.path});
 
@@ -22,9 +24,11 @@ class MenuRoute {
   }
 }
 
-const MenuRoute menu = MenuRoute([
+final MenuRoute menu = MenuRoute([
   MenuRouteItem(path: '/popular'),
   MenuRouteItem(path: '/timeline'),
   MenuRouteItem(path: '/collect'),
+  // [my修改] 本地视频页签 (仅桌面端)
+  if (kSupportsLocalVideo) MenuRouteItem(path: '/local_video'),
   MenuRouteItem(path: '/my'),
 ]);

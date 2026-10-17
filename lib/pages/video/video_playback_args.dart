@@ -41,3 +41,15 @@ class OfflineVideoPlaybackArgs extends VideoPlaybackArgs {
   final int road;
   final List<DownloadEpisode> downloadedEpisodes;
 }
+
+/// [my修改] 本地视频文件播放：filePaths 为磁盘上真实存在的绝对路径
+class LocalVideoPlaybackArgs extends VideoPlaybackArgs {
+  const LocalVideoPlaybackArgs({
+    required super.bangumiItem,
+    required this.filePaths,
+    this.startEpisode = 1,
+  });
+
+  final List<String> filePaths;
+  final int startEpisode;
+}

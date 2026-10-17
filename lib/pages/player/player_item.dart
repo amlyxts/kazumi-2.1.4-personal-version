@@ -885,7 +885,10 @@ class _PlayerItemState extends State<PlayerItem>
       }
     }
 
-    final bool requiresPerformanceWarning = mode == SuperResolutionMode.quality;
+    // [my修改] 性能提示扩展到质量档与 FSRCNNX 实拍-质量档
+    final bool requiresPerformanceWarning =
+        mode == SuperResolutionMode.quality ||
+        mode == SuperResolutionMode.fsrcnnxQuality;
     final bool warningDisabled = GStorage.getSetting(
       SettingsKeys.disableSuperResolutionWarning,
     );

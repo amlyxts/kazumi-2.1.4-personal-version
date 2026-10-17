@@ -4,6 +4,7 @@ import 'package:kazumi/bean/widget/kazumi_menu.dart';
 import 'package:kazumi/bean/widget/loading_indicator.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/modules/history/history_module.dart';
+import 'package:kazumi/utils/constants.dart';
 
 class HistoryRecordTile extends StatelessWidget {
   const HistoryRecordTile({
@@ -50,10 +51,14 @@ class HistoryRecordTile extends StatelessWidget {
     final episode = history.lastWatchEpisodeName.isEmpty
         ? '第 ${history.lastWatchEpisode} 话'
         : history.lastWatchEpisodeName;
-    final source = HistoryEntryKind.normalize(history.entryKind) ==
-            HistoryEntryKind.offline
-        ? '缓存'
-        : '在线';
+    // [my修改] 本地视频条目显示"本地视频"，不展示虚拟插件名
+    final isLocal = history.adapterName == localVideoPluginName;
+    final source = isLocal
+        ? '本地视频'
+        : (HistoryEntryKind.normalize(history.entryKind) ==
+                HistoryEntryKind.offline
+            ? '缓存'
+            : '在线');
     final time =
         TimeOfDay.fromDateTime(history.lastWatchTime.toLocal()).format(context);
     final image = history.bangumiItem.images['large'] ?? '';
@@ -130,7 +135,8 @@ class HistoryRecordTile extends StatelessWidget {
                     Text(
                       [
                         source,
-                        if (history.adapterName.isNotEmpty) history.adapterName,
+                        if (!isLocal && history.adapterName.isNotEmpty)
+                          history.adapterName,
                         time
                       ].join(' · '),
                       maxLines: 2,

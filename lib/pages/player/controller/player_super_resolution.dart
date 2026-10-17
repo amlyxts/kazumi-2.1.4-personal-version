@@ -13,6 +13,16 @@ enum SuperResolutionMode {
     storageValue: 3,
     label: '质量档',
     description: '默认启用基于Anime4K的超分辨率 (质量优先)',
+  ),
+  fsrcnnxEfficiency(
+    storageValue: 4,
+    label: '实拍-效率档',
+    description: '基于FSRCNNX的超分辨率 (实拍内容适用, 效率优先)',
+  ),
+  fsrcnnxQuality(
+    storageValue: 5,
+    label: '实拍-质量档',
+    description: '基于FSRCNNX的超分辨率 (实拍内容适用, 质量优先)',
   );
 
   const SuperResolutionMode({

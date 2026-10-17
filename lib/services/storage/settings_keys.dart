@@ -475,6 +475,45 @@ class SettingsKeys {
     2,
     group: SettingGroup.download,
   );
+
+  // [my修改] 验证码 OCR 自动识别 + 自定义规则仓库
+  static const captchaOcrEnable = SettingKey<bool>(
+    'captchaOcrEnable',
+    true,
+    group: SettingGroup.misc,
+  );
+  static const captchaOcrChannels = SettingKey<String>(
+    'captchaOcrChannels',
+    '',
+    group: SettingGroup.misc,
+  );
+  static const customRuleRepos = SettingKey<String>(
+    'customRuleRepos',
+    '',
+    group: SettingGroup.misc,
+  );
+
+  // [my修改] 本地视频 + 画面去色带
+  static const localVideoLastDirectory = SettingKey<String>(
+    'localVideoLastDirectory',
+    '',
+    group: SettingGroup.misc,
+  );
+  static const localVideoCategories = SettingKey<String>(
+    'localVideoCategories',
+    '[]',
+    group: SettingGroup.misc,
+  );
+  static const localVideoCategoryAssign = SettingKey<String>(
+    'localVideoCategoryAssign',
+    '{}',
+    group: SettingGroup.misc,
+  );
+  static const playerDebandEnable = SettingKey<bool>(
+    'playerDebandEnable',
+    false,
+    group: SettingGroup.player,
+  );
   static const downloadParallelSegments = SettingKey<int>(
     _SettingBoxKey.downloadParallelSegments,
     3,

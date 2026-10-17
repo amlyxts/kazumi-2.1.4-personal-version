@@ -3,6 +3,8 @@ import 'package:kazumi/bean/settings/settings_list.dart';
 import 'package:kazumi/bean/widget/content_section.dart';
 import 'package:kazumi/bean/widget/state_presentation.dart';
 import 'package:kazumi/modules/my/watch_stats.dart';
+import 'package:kazumi/pages/video/local_video_launcher.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:material_new_shapes/material_new_shapes.dart';
 
 enum MyDestination {
@@ -100,6 +102,18 @@ class _WideSpaceLayout extends StatelessWidget {
             ),
           ),
         ),
+        // [my修改] 播放本地视频入口（仅桌面端）
+        if (kSupportsLocalVideo) ...[
+          const SizedBox(height: 12),
+          _ToolTile(
+            icon: Icons.video_library_rounded,
+            title: '播放本地视频',
+            caption: '播放电脑上的视频文件，支持文件夹连播',
+            color: colors.primaryContainer,
+            foreground: colors.onPrimaryContainer,
+            onTap: () => pickAndPlayLocalVideo(context),
+          ),
+        ],
         const SizedBox(height: 12),
         _AdaptivePair(
           first: _PreferencesPanel(onOpen: onOpen),

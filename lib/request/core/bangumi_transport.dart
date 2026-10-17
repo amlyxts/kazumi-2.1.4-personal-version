@@ -13,6 +13,19 @@ import 'package:kazumi/services/network/bangumi_ech_resolver.dart';
 const _echRequestKey = 'bangumiEch';
 
 class BangumiAccelerationInterceptor extends Interceptor {
+  /// [my modification] Routes where the mirror backend enforces signatures (the local build has no official KAZUMI_APPID/KEY, so these routes
+  /// necessarily get 401 when going through the mirror); automatically downgrade to ECH under mirror mode.
+  static bool _mirrorSignatureRequired(Uri uri) {
+    final path = uri.path;
+    if (path == '/v0/search/subjects') {
+      return true;
+    }
+    return (path.startsWith('/p1/subjects/') ||
+            path.startsWith('/p1/episodes/') ||
+            path.startsWith('/p1/characters/')) &&
+        path.endsWith('/comments');
+  }
+
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     options.extra.remove(_echRequestKey);
@@ -26,6 +39,15 @@ class BangumiAccelerationInterceptor extends Interceptor {
           options.queryParameters = {};
           options.extra[_echRequestKey] = true;
         case BangumiAcceleration.mirror:
+          // [my modification] This build has no mirror credentials: routes requiring signatures (search/comments)
+          // automatically downgrade to ECH in mirror mode, other routes go through the mirror normally
+          if (_mirrorSignatureRequired(uri)) {
+            options.extra[_echRequestKey] = true;
+            KazumiLogger().d(
+              'Mirror requires signature, fallback to ECH: ${uri.path}',
+            );
+            break;
+          }
           options.path =
               ApiEndpoints.bangumiMirrorDomain +
               uri.path +

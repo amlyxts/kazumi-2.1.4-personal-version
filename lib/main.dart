@@ -22,9 +22,16 @@ import 'package:kazumi/services/platform/desktop_window_config.dart';
 import 'package:kazumi/services/platform/webview_feature_service.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/navigation.dart';
+import 'package:kazumi/utils/qa_driver.dart';
 
-void main() async {
+// [my修改] 支持命令行参数 (--qa-play 无头画质测试驱动)
+void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // [my修改] 路线②画质测试驱动: --qa-play 无头模式 (规则→搜索→取集→嗅探直链→JSON→退出), 不进主界面
+  if (args.contains('--qa-play')) {
+    await runQaDriver(args);
+    return;
+  }
   registerEchHttpLicenses();
   MediaKit.ensureInitialized();
   if (Platform.isAndroid || Platform.isIOS) {

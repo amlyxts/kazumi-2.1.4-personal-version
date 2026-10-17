@@ -178,7 +178,8 @@ class PlayerController implements Disposable {
     referer = params.referer;
 
     KazumiLogger().i(
-        'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}');
+        'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}, referer: ${params.referer}',
+        forceLog: true);
 
     playback.resetForInit();
     debug.playerLogLevel = GStorage.getSetting(SettingsKeys.playerLogLevel);
@@ -298,6 +299,8 @@ class PlayerController implements Disposable {
 
   Future<void> setPlaybackSpeed(double playerSpeed) async {
     await playback.setPlaybackSpeed(playerSpeed);
+    // [my修改] 跨会话记忆：手动变速即写入默认倍速，下次播放沿用
+    GStorage.putSetting(SettingsKeys.defaultPlaySpeed, playerSpeed);
     try {
       updateDanmakuSpeed();
     } catch (_) {}

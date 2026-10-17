@@ -40,7 +40,7 @@ class PluginBatchUpdateResult {
 }
 
 typedef PluginCatalogLoader = Future<List<PluginHTTPItem>> Function();
-typedef PluginLoader = Future<Plugin> Function(String name);
+typedef PluginLoader = Future<Plugin> Function(String name, String? sourceBase);
 typedef PluginJsonWriter = Future<void> Function(String jsonData);
 typedef PluginErrorReporter = void Function(
   String message,
@@ -64,7 +64,8 @@ abstract class _PluginsController with Store {
     PluginJsonWriter? pluginJsonWriter,
     PluginErrorReporter? errorReporter,
   })  : _catalogLoader = catalogLoader ?? PluginCatalogApi.getPluginList,
-        _pluginLoader = pluginLoader ?? PluginCatalogApi.getPlugin,
+        _pluginLoader = pluginLoader ??
+            ((name, sourceBase) => PluginCatalogApi.getPlugin(name, base: sourceBase)),
         _pluginJsonWriter = pluginJsonWriter,
         _errorReporter = errorReporter ?? _defaultPluginErrorReporter;
 
@@ -78,6 +79,10 @@ abstract class _PluginsController with Store {
   Map<String, PluginHTTPItem> _pluginCatalogByName = const {};
   DateTime? _pluginCatalogRefreshedAt;
   int _optimisticReorderRevision = 0;
+
+  // [my修改] 多仓库切换: 当前仓库 (null = 官方) 与每仓库目录缓存
+  final Map<String, List<PluginHTTPItem>> _repoCatalogCache = {};
+  final Map<String, DateTime> _repoCatalogRefreshedAt = {};
 
   // Reuse a recent catalog across startup, the rule list, and the rule shop.
   // Explicit refresh actions always bypass this window.
@@ -247,11 +252,34 @@ abstract class _PluginsController with Store {
     }
   }
 
-  Future<List<PluginHTTPItem>> refreshPluginCatalog() {
+  // [my修改] [repoBase] 为 null = 官方仓库; 否则为自定义仓库 base 前缀。
+  // 每仓库独立缓存 (5 分钟新鲜度), 切换仓库优先用缓存。
+  Future<List<PluginHTTPItem>> refreshCatalogForRepo(
+      String? repoBase, String repoName) {
+    final cacheKey = repoBase ?? 'official';
+    final cachedAt = _repoCatalogRefreshedAt[cacheKey];
+    final cached = _repoCatalogCache[cacheKey];
+    if (cached != null &&
+        cachedAt != null &&
+        DateTime.now().difference(cachedAt) < _pluginCatalogMaxAge) {
+      _pluginCatalogByName = {
+        for (final item in cached) pluginNameKey(item.name): item,
+      };
+      pluginHTTPList
+        ..clear()
+        ..addAll(cached);
+      _pluginCatalogRefreshedAt = cachedAt;
+      return Future.value(List<PluginHTTPItem>.unmodifiable(cached));
+    }
     return _catalogRefreshSingleFlight.run(() async {
       try {
-        final catalog = await _catalogLoader();
-        _pluginCatalogByName = {
+        final catalog = repoBase == null
+            ? await _catalogLoader()
+            : await PluginCatalogApi.fetchCatalogFromRepo(
+                RuleRepo(name: repoName, url: repoBase));
+        _repoCatalogCache[cacheKey] = catalog;
+        _repoCatalogRefreshedAt[cacheKey] = DateTime.now();
+          _pluginCatalogByName = {
           for (final item in catalog) pluginNameKey(item.name): item,
         };
         pluginHTTPList
@@ -270,6 +298,16 @@ abstract class _PluginsController with Store {
     });
   }
 
+  Future<List<PluginHTTPItem>> refreshPluginCatalog() {
+    return refreshCatalogForRepo(null, '官方仓库');
+  }
+
+  // [my修改] 切换仓库: refreshCatalogForRepo 内部优先用每仓库缓存
+  Future<List<PluginHTTPItem>> switchCatalogForRepo(
+      String? repoBase, String repoName) {
+    return refreshCatalogForRepo(repoBase, repoName);
+  }
+
   Future<List<PluginHTTPItem>> ensurePluginCatalog() {
     if (isPluginCatalogFresh) {
       return Future.value(
@@ -283,7 +321,8 @@ abstract class _PluginsController with Store {
     if (!enabled) {
       return 0;
     }
-    await refreshPluginCatalog();
+    // [my修改] 启动更新检查固定查官方仓库 (自定义仓库由市场页切换时查看)
+    await refreshCatalogForRepo(null, '官方仓库');
     return _updatablePluginNames().length;
   }
 
@@ -333,9 +372,10 @@ abstract class _PluginsController with Store {
 
   Future<PluginUpdateResult> tryUpdatePluginByName(String name) {
     return _mutations.run(() async {
-      final catalogName =
-          _pluginCatalogByName[pluginNameKey(name)]?.name ?? name;
-      final attempt = await _preparePluginUpdate(catalogName);
+      final catalogItem = _pluginCatalogByName[pluginNameKey(name)];
+      final catalogName = catalogItem?.name ?? name;
+      final attempt = await _preparePluginUpdate(
+          catalogName, catalogItem?.sourceBase);
       if (attempt.result == PluginUpdateResult.updated) {
         await _mutateAndPersistNow(
           () => _replacePlugin(attempt.plugin!),
@@ -347,10 +387,13 @@ abstract class _PluginsController with Store {
     });
   }
 
-  Future<_PluginUpdateAttempt> _preparePluginUpdate(String name) async {
+  Future<_PluginUpdateAttempt> _preparePluginUpdate(
+      String name,
+      String? sourceBase,
+      ) async {
     late final Plugin remotePlugin;
     try {
-      remotePlugin = await _pluginLoader(name);
+      remotePlugin = await _pluginLoader(name, sourceBase);
     } catch (error, stackTrace) {
       _errorReporter(
         'Plugin: failed to download rule $name',
@@ -473,7 +516,9 @@ abstract class _PluginsController with Store {
     Future<void> worker() async {
       while (nextIndex < names.length) {
         final index = nextIndex++;
-        results[index] = await _preparePluginUpdate(names[index]);
+        results[index] = await _preparePluginUpdate(
+            names[index],
+            _pluginCatalogByName[pluginNameKey(names[index])]?.sourceBase);
       }
     }
 

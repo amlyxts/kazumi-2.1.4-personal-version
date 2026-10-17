@@ -885,10 +885,11 @@ class _PlayerItemState extends State<PlayerItem>
       }
     }
 
-    // [my修改] 性能提示扩展到质量档与 FSRCNNX 实拍-质量档
+    // [my修改] 性能提示覆盖重负载档: Anime4K 质量档 / FSRCNNX 质量档 / ArtCNN
     final bool requiresPerformanceWarning =
         mode == SuperResolutionMode.quality ||
-        mode == SuperResolutionMode.fsrcnnxQuality;
+        mode == SuperResolutionMode.fsrcnnxQuality ||
+        mode == SuperResolutionMode.artcnn;
     final bool warningDisabled = GStorage.getSetting(
       SettingsKeys.disableSuperResolutionWarning,
     );
@@ -906,7 +907,7 @@ class _PlayerItemState extends State<PlayerItem>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('启用超分辨率（质量档）可能会造成设备卡顿，是否继续？'),
+                const Text('启用超分辨率的高负载档位可能会造成设备卡顿，是否继续？'),
                 const SizedBox(height: 12),
                 Row(
                   mainAxisSize: MainAxisSize.min,

@@ -4,32 +4,34 @@ enum SuperResolutionMode {
     label: '关闭',
     description: '默认禁用超分辨率',
   ),
+  // [my修改] 档位按"动漫专用在前、通用在后"重排并统一命名; storageValue 保持
+  // 不变, 旧存档不受影响。
   efficiency(
     storageValue: 2,
-    label: '效率档',
-    description: '默认启用基于Anime4K的超分辨率 (效率优先)',
+    label: '动漫-效率档',
+    description: 'Anime4K 超分, 效率优先 (低清新番日常用)',
   ),
   quality(
     storageValue: 3,
-    label: '质量档',
-    description: '默认启用基于Anime4K的超分辨率 (质量优先)',
+    label: '动漫-质量档',
+    description: 'Anime4K 超分, 质量优先',
   ),
-  fsrcnnxEfficiency(
-    storageValue: 4,
-    label: '通用-效率档',
-    description: '基于FSRCNNX的超分辨率 (实拍/动漫通用, 效率优先)',
-  ),
-  fsrcnnxQuality(
-    storageValue: 5,
-    label: '通用-质量档',
-    description: '基于FSRCNNX的超分辨率 (实拍/动漫通用, 质量优先; 老番与噪点源效果好)',
-  ),
-  // [my修改] 动漫专用新档: ArtCNN 超质 + 感知画质增强三件套
   artcnn(
     storageValue: 6,
     label: '动漫-超质',
     description: 'ArtCNN 专为动漫线稿训练的CNN超分 (中高档GPU推荐, 线稿干净度最佳)',
   ),
+  fsrcnnxEfficiency(
+    storageValue: 4,
+    label: '通用-效率档',
+    description: 'FSRCNNX 超分, 实拍/动漫通用, 效率优先',
+  ),
+  fsrcnnxQuality(
+    storageValue: 5,
+    label: '通用-质量档',
+    description: 'FSRCNNX 超分, 实拍/动漫通用, 质量优先 (老番与噪点源效果好)',
+  ),
+  // [my修改] 感知画质增强三件套
   enhance(
     storageValue: 7,
     label: '画质增强',

@@ -574,6 +574,10 @@ abstract class _PlayerPlaybackController with Store {
           break;
       }
       superResolutionMode = mode;
+      // [my修改] 播放器面板选择的档位同步持久化: 上游只认设置页入口写盘,
+      // 快菜单选的档重进播放页就丢, 与"记住我的超分档位"的直觉相悖。
+      await GStorage.putSetting(
+          SettingsKeys.defaultSuperResolutionMode, mode.storageValue);
     } catch (e) {
       KazumiLogger().w('PlayerController: failed to set shader', error: e);
     }

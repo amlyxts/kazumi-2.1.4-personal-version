@@ -126,6 +126,9 @@ class AutoUpdater {
   }
 
   Future<UpdateInfo?> checkForUpdates() async {
+    // [my修改] iOS 侧载版禁用内置更新检查: 数据源是上游官方仓库, 误点更新会
+    // 用官方版覆盖个人版 (定制功能全没)。iOS 更新走 CI 出包手动重签。
+    if (Platform.isIOS) return null;
     try {
       final data = await _latestRelease();
 

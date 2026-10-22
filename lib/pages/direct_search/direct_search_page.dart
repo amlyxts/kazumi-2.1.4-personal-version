@@ -21,7 +21,6 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:crypto/crypto.dart' as crypto;
-import 'package:html/dom.dart' as html_dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -78,9 +77,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   String? _fsCookies;
   String? _fsUA;
 
-  // 搜索模式状态
-  bool _searching = false;
-  String? _searchError;
+  // 搜索模式状态 (加载/错误与浏览模式共用 _loading/_error)
   final Map<String, _BangumiRef> _bangumiRefs = {};
   bool _bangumiQuerying = false;
 
@@ -178,24 +175,21 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     try {
       final root = html_parser.parse(html).documentElement!;
       final cards = <_BrowseCard>[];
-      final containers = root.queryXPath(
-          '//div[contains(@class,"video-item-container")][.//a[contains(@href,"watch?v=")]]');
-      for (final node in containers.nodes) {
-        final element = node as html_dom.Element;
-        final anchor = element.queryXPath('.//a[contains(@class,"video-link")]').node;
-        if (anchor == null) continue;
-        final href = anchor.attributes['href'] ?? '';
+      // 引擎不支持谓词内后代轴 (.//a[...]), 用锚点直选 + 单元素双简单谓词
+      final anchors = root.queryXPath(
+          '//a[contains(@class,"video-link")][contains(@href,"watch?v=")]');
+      for (final node in anchors.nodes) {
+        final href = node.attributes['href'] ?? '';
         if (!href.contains('watch?v=')) continue;
         final titleNode =
-            element.queryXPath('.//div[contains(@class,"title")]/text()').node;
-        final title = (titleNode?.text ?? element.attributes['title'] ?? '')
-            .trim();
-        final thumb =
-            element.queryXPath('.//img[contains(@class,"main-thumb")]/@src').node;
+            node.queryXPath('.//div[contains(@class,"title")]').node;
+        final title = (titleNode?.text ?? '').trim();
+        final thumbNode =
+            node.queryXPath('.//img[contains(@class,"main-thumb")]').node;
         cards.add(_BrowseCard(
           title: title,
           href: href,
-          thumb: thumb?.text ?? '',
+          thumb: thumbNode?.attributes['src'] ?? '',
         ));
       }
       if (cards.isEmpty) return null;
@@ -405,6 +399,15 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ],
             ),
           ),
+          if (_bangumiQuerying)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('正在匹配 Bangumi 评分…',
+                    style: TextStyle(fontSize: 12)),
+              ),
+            ),
           SizedBox(
             height: 48,
             child: ListView(
@@ -475,7 +478,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                               card.thumb,
                               width: double.infinity,
                               fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Container(
+                              errorBuilder: (_, _, _) => Container(
                                 color: Theme.of(context)
                                     .colorScheme
                                     .surfaceContainerHighest,
@@ -493,11 +496,14 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                           style: const TextStyle(fontSize: 13),
                         ),
                         if (ref != null)
-                          Text(
-                            'bgm ★${ref.score.toStringAsFixed(1)}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context).colorScheme.primary,
+                          GestureDetector(
+                            onTap: () => _openBgmSubject(ref.subjectId),
+                            child: Text(
+                              'bgm ★${ref.score.toStringAsFixed(1)} →',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
                             ),
                           ),
                       ],
@@ -518,7 +524,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   ),
                   Text('第 $_page 页'),
                   IconButton(
-                    onPressed: _nextPageLoad,
+                    onPressed:
+                        _nextPage != null ? _nextPageLoad : null,
                     icon: const Icon(Icons.chevron_right),
                   ),
                 ],

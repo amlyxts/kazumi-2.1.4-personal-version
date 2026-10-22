@@ -18,6 +18,7 @@ import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:crypto/crypto.dart' as crypto;
@@ -667,11 +668,18 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                               Positioned.fill(
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(8),
-                                  child: Image.network(
-                                    card.thumb,
+                                  child: CachedNetworkImage(
+                                    imageUrl: card.thumb,
                                     width: double.infinity,
                                     fit: BoxFit.cover,
-                                    errorBuilder: (_, _, _) => Container(
+                                    fadeInDuration:
+                                        const Duration(milliseconds: 120),
+                                    placeholder: (context, url) => Container(
+                                      color: Theme.of(context).colorScheme
+                                          .surfaceContainerHighest,
+                                    ),
+                                    errorWidget: (context, url, error) =>
+                                        Container(
                                       color: Theme.of(context).colorScheme
                                           .surfaceContainerHighest,
                                       child: const Center(

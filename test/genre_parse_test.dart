@@ -5,7 +5,13 @@ import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 
 void main() {
   test('分区页卡片解析 (引擎同款)', () {
-    final raw = File('C:/Users/liuxuan/Downloads/Kazumi-2.1.4/tools/hanime1_genre_rifan.html').readAsStringSync();
+    // 测试 HTML 由探查流程生成 (外部资产), 路径经环境变量传入
+    final path = Platform.environment['TEST_GENRE_HTML'];
+    if (path == null || path.isEmpty) {
+      print('skip: 未设置 TEST_GENRE_HTML (外部测试资产)');
+      return;
+    }
+    final raw = File(path).readAsStringSync();
     final root = html_parser.parse(raw).documentElement!;
     final anchors = root.queryXPath(
         '//a[contains(@class,"video-link")][contains(@href,"watch?v=")]');

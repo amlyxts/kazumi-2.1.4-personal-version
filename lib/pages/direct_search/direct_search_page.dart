@@ -255,16 +255,18 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   String _lastFetchedUrl = '';
 
-  /// 构建当前列表 URL: 标签优先 > 分区 > 全站目录
+  /// 构建当前列表 URL: 分区与标签可同时生效 (站点原生支持组合参数)
   String _listUrlFor() {
+    final params = <String>[];
     if (_activeTags.isNotEmpty) {
-      final tagParams = _activeTags
-          .map((t) => 'tags%5B%5D=${Uri.encodeComponent(t)}')
-          .join('&');
-      return '$_siteBase/search?$tagParams';
+      params.addAll(_activeTags
+          .map((t) => 'tags%5B%5D=${Uri.encodeComponent(t)}'));
     }
-    if (_genre == '最新') return '$_siteBase/search';
-    return '$_siteBase/search?genre=${Uri.encodeComponent(_genre)}';
+    if (_genre != '最新') {
+      params.add('genre=${Uri.encodeComponent(_genre)}');
+    }
+    if (params.isEmpty) return '$_siteBase/search';
+    return '$_siteBase/search?${params.join('&')}';
   }
 
   Future<void> _loadList({required bool reset, int page = 1}) async {
@@ -548,35 +550,33 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ],
             ),
           ),
-          if (_siteTags.isNotEmpty)
-            SizedBox(
-              height: 48,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
+          SizedBox(
+            height: 48,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: ActionChip(
+                    avatar: const Icon(Icons.sell_outlined, size: 16),
+                    label:
+                        const Text('標籤', style: TextStyle(fontSize: 12)),
+                    onPressed: _showTagPicker,
+                  ),
+                ),
+                for (final t in _activeTags)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: ActionChip(
-                      avatar: const Icon(Icons.sell_outlined, size: 16),
-                      label:
-                          const Text('標籤', style: TextStyle(fontSize: 12)),
-                      onPressed: _showTagPicker,
+                    child: InputChip(
+                      label: Text(t, style: const TextStyle(fontSize: 12)),
+                      onDeleted: () {
+                        setState(() => _activeTags.remove(t));
+                        _loadList(reset: true);
+                      },
                     ),
                   ),
-                  for (final t in _activeTags)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: InputChip(
-                        label: Text(t, style: const TextStyle(fontSize: 12)),
-                        onDeleted: () {
-                          setState(() => _activeTags.remove(t));
-                          _loadList(reset: true);
-                        },
-                      ),
-                    ),
-                ],
-              ),
+              ],
             ),
           if (_bangumiQuerying)
             const Padding(

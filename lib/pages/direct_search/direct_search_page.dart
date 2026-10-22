@@ -12,6 +12,7 @@ import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/dialog/dialog_task.dart';
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
+import 'package:kazumi/modules/bangumi/bangumi_collection_type.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
@@ -152,7 +153,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   }
 
   BangumiItem _fabricatedItem(_BrowseCard card) {
-    final pluginName = _selectedPlugin?.name ?? 'direct';
     final name = card.title.trim();
     final id = _itemIdFor(card);
     final ref = _refFor(card);
@@ -412,26 +412,72 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   // ====== 收藏切换 (本地收藏 + Bangumi 同步按全局开关走) ======
 
-  Future<void> _toggleCollect(_BrowseCard card) async {
-    const collectType = 2; // 看过 (二刷场景)
+  /// 星标点击 → 分类选择弹窗 (用户自主判断分类; 已收藏可选取消收藏)
+  Future<void> _showCollectTypePicker(_BrowseCard card) async {
     final item = _fabricatedItem(card);
-    final collected = _collectedIds.contains(item.id);
-    if (collected) {
-      await _collectController.deleteCollect(item);
-      _collectedIds.remove(item.id);
-      if (mounted) {
-        KazumiDialog.showToast(message: '已取消收藏');
-      }
-    } else {
-      await _collectController.addCollect(item, type: collectType);
-      _collectedIds.add(item.id);
-      if (mounted) {
-        KazumiDialog.showToast(
-            message: '已收藏 (分类: 看过'
-                '${_refFor(card) != null ? '; 匹配 bgm 条目自动同步' : ''})');
-      }
-    }
-    if (mounted) setState(() {});
+    final wasCollected = _collectedIds.contains(item.id);
+    int? selectedType = wasCollected ? 2 : null; // 预选: 已收藏默认看过
+    await KazumiDialog.show(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Widget typeOption(BangumiCollectionType t) => RadioListTile<int>(
+                value: t.value,
+                groupValue: selectedType,
+                title: Text(t.label),
+                dense: true,
+                onChanged: (v) => setDialogState(() => selectedType = v),
+              );
+          return AlertDialog(
+            title: Text(card.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 16)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final t in [
+                  BangumiCollectionType.planToWatch,
+                  BangumiCollectionType.watched,
+                  BangumiCollectionType.watching,
+                  BangumiCollectionType.onHold,
+                  BangumiCollectionType.abandoned,
+                ])
+                  typeOption(t),
+                if (wasCollected)
+                  ListTile(
+                    leading: const Icon(Icons.close),
+                    title: const Text('取消收藏'),
+                    dense: true,
+                    onTap: () => setDialogState(() => selectedType = 0),
+                  ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: KazumiDialog.dismiss,
+                child: Text('取消',
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.outline)),
+              ),
+              TextButton(
+                onPressed: () {
+                  final type = selectedType;
+                  if (type == null || type <= 0) return;
+                  _collectController.addCollect(item, type: type);
+                  if (selectedType == 0) {
+                    _collectedIds.remove(item.id);
+                  } else {
+                    _collectedIds.add(item.id);
+                  }
+                  KazumiDialog.dismiss();
+                },
+                child: const Text('确定'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   // ====== 播放 (卡片 → 取集 → 播放页) ======
@@ -758,7 +804,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                         ),
                         const SizedBox(height: 4),
                         GestureDetector(
-                          onTap: () => _toggleCollect(card),
+                          onTap: () => _showCollectTypePicker(card),
                           child: Icon(
                             _collectedIds.contains(_itemIdFor(card))
                                 ? Icons.star

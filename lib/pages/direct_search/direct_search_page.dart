@@ -5,6 +5,7 @@
 // 元素定位)。
 // 播放: 取集 → 伪 bangumi 条目 (md5 稳定 id, 与本地视频模式同构)。
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -199,7 +200,68 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     );
   }
 
-  // ====== 列表抓取 (dio 快速通道优先, 挑战时 FlareSolverr 过盾) ======
+  // ====== 列表抓取 (系统 curl 快速通道优先; 挑战时 FlareSolverr 过盾) ======
+  // [my修复] CF 按 TLS 指纹拦截 dart 网络栈: 同 cookies/UA/代理下 curl 200
+  // 而 dart HttpClient 403 挑战页 (边缘 ~200ms 即拒), 故快速通道必须走
+  // 系统 curl.exe (Schannel 指纹可过); curl 缺失时才落 dio, 挑战落过盾。
+
+  /// 统一处理快速通道拿到的 HTML: 挑战检测 + 标签播种 + 卡片解析
+  _ListPage? _consumeListBody(String body) {
+    if (body.isEmpty) return null;
+    if (body.contains('challenge-platform') &&
+        !body.contains('video-item-container')) {
+      return null; // 又被挑战了
+    }
+    if (_siteTagGroups.isEmpty) {
+      final groups = _parseTagGroups(body);
+      if (groups.isNotEmpty && mounted) {
+        setState(() => _siteTagGroups..clear()..addAll(groups));
+      }
+    }
+    return _parseCards(body);
+  }
+
+  String? get _curlExe {
+    final root = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+    final exe = '$root\\System32\\curl.exe';
+    return File(exe).existsSync() ? exe : null;
+  }
+
+  Future<_ListPage?> _fetchViaCurl(String url) async {
+    if (_fsCookies == null) return null;
+    final exe = _curlExe;
+    if (exe == null) return null;
+    try {
+      final proxy =
+          NetworkConfig.fromSettings().proxyForUri(Uri.parse(url));
+      final r = await Process.run(
+        exe,
+        [
+          '-s',
+          '--compressed',
+          '--max-time',
+          '20',
+          if (proxy != null) ...['-x', 'http://${proxy.host}:${proxy.port}'],
+          '-A',
+          _fsUA ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          '-H',
+          'Cookie: ${_fsCookies!}',
+          url,
+        ],
+        stdoutEncoding: utf8,
+        stderrEncoding: utf8,
+      );
+      final body = r.stdout.toString();
+      final page = _consumeListBody(body);
+      if (page == null && body.contains('challenge-platform')) {
+        KazumiLogger().w('DirectSearch: curl fast path got challenge page');
+      }
+      return page;
+    } catch (e) {
+      KazumiLogger().w('DirectSearch: curl fast path error: $e');
+      return null;
+    }
+  }
 
   Dio _browseDio() {
     final dio = Dio(BaseOptions(
@@ -224,20 +286,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (_fsCookies == null) return null;
     try {
       final resp = await _browseDio().get(url);
-      if (resp.statusCode != 200) return null;
-      final body = resp.data.toString();
-      if (body.contains('challenge-platform') &&
-          !body.contains('video-item-container')) {
-        return null; // 又被挑战了
+      if (resp.statusCode != 200) {
+        KazumiLogger().w(
+            'DirectSearch: dio fast path status=${resp.statusCode} (403=CF 按 TLS 指纹拦 dart 栈, 属预期, 由 curl 通道接手)');
+        return null;
       }
-      // 快速通道同样播种标签分组 (列表页自带 #tags 模态框), 不再依赖过盾路径
-      if (_siteTagGroups.isEmpty) {
-        final groups = _parseTagGroups(body);
-        if (groups.isNotEmpty && mounted) {
-          setState(() => _siteTagGroups..clear()..addAll(groups));
-        }
-      }
-      return _parseCards(body);
+      return _consumeListBody(resp.data.toString());
     } catch (_) {
       return null;
     }
@@ -287,6 +341,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   Future<_ListPage?> _fetchList(String url) async {
     final sw = Stopwatch()..start();
+    final viaCurl = await _fetchViaCurl(url);
+    if (viaCurl != null && viaCurl.cards.isNotEmpty) {
+      KazumiLogger().i(
+          'DirectSearch: curl fast path ${sw.elapsedMilliseconds}ms, ${viaCurl.cards.length} cards');
+      return viaCurl;
+    }
     final viaDio = await _fetchViaDio(url);
     if (viaDio != null && viaDio.cards.isNotEmpty) {
       KazumiLogger().i(

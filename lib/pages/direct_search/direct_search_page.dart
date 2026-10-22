@@ -15,6 +15,7 @@ import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
+import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
@@ -61,6 +62,10 @@ class DirectSearchPage extends StatefulWidget {
 class _DirectSearchPageState extends State<DirectSearchPage>
     with KazumiDialogOwner {
   final PluginsController _pluginsController = inject<PluginsController>();
+  final CollectController _collectController = inject<CollectController>();
+
+  /// 已收藏条目 (按条目 id), 控制卡片收藏星标状态
+  final Set<int> _collectedIds = {};
 
   /// 浏览目标站点首页 (卡片结构解析基准), 站名在设置里配置不写入代码。
   String get _siteBase {
@@ -115,6 +120,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     super.initState();
     final usable = _usableSources();
     if (usable.isNotEmpty) _selectedPlugin = usable.first;
+    _collectController.loadCollectibles();
+    _collectedIds.addAll(
+        _collectController.collectibles.map((c) => c.bangumiItem.id));
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _loadList(reset: true));
   }
@@ -131,11 +139,25 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     return int.parse(hex.substring(0, 7), radix: 16);
   }
 
+  /// 卡片的条目 id: 匹配 bgm 条目时使用真实条目 id (收藏/Bangumi 同步走
+  /// 真实条目), 未匹配时用稳定哈希 id (本地条目)。
+  int _itemIdFor(_BrowseCard card) {
+    final ref = _refFor(card);
+    final pluginName = _selectedPlugin?.name ?? 'direct';
+    if (ref != null) {
+      final realId = int.tryParse(ref.subjectId);
+      if (realId != null) return realId;
+    }
+    return _stableDirectId('${pluginName}_${card.href}');
+  }
+
   BangumiItem _fabricatedItem(_BrowseCard card) {
     final pluginName = _selectedPlugin?.name ?? 'direct';
     final name = card.title.trim();
+    final id = _itemIdFor(card);
+    final ref = _refFor(card);
     return BangumiItem(
-      id: _stableDirectId('${pluginName}_${card.href}'),
+      id: id,
       type: 2,
       name: name,
       nameCn: name,
@@ -143,10 +165,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       airDate: '',
       airWeekday: 0,
       rank: 0,
-      images: const {},
+      images: {
+        if (card.thumb.isNotEmpty) 'large': card.thumb,
+      },
       tags: [],
       alias: [],
-      ratingScore: 0.0,
+      ratingScore: ref?.score ?? 0.0,
       votes: 0,
       votesCount: [],
       info: '',
@@ -384,6 +408,27 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     } catch (e) {
       KazumiDialog.showToast(message: '无法打开浏览器');
     }
+  }
+
+  // ====== 收藏切换 (本地收藏 + Bangumi 同步按全局开关走) ======
+
+  Future<void> _toggleCollect(_BrowseCard card) async {
+    final item = _fabricatedItem(card);
+    final collected = _collectedIds.contains(item.id);
+    if (collected) {
+      await _collectController.deleteCollect(item);
+      _collectedIds.remove(item.id);
+      if (mounted) {
+        KazumiDialog.showToast(message: '已取消收藏');
+      }
+    } else {
+      await _collectController.addCollect(item);
+      _collectedIds.add(item.id);
+      if (mounted) {
+        KazumiDialog.showToast(message: '已收藏 (匹配 bgm 条目时自动同步)');
+      }
+    }
+    if (mounted) setState(() {});
   }
 
   // ====== 播放 (卡片 → 取集 → 播放页) ======
@@ -709,6 +754,16 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                           ),
                         ),
                         const SizedBox(height: 4),
+                        GestureDetector(
+                          onTap: () => _toggleCollect(card),
+                          child: Icon(
+                            _collectedIds.contains(_itemIdFor(card))
+                                ? Icons.star
+                                : Icons.star_border,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
                         Text(
                           card.title,
                           maxLines: 2,

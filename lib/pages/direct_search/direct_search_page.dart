@@ -234,11 +234,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     try {
       final proxy =
           NetworkConfig.fromSettings().proxyForUri(Uri.parse(url));
+      // [my修复] 不带 --compressed: Win10 内置 curl 8.4.0 (Schannel) 不支持
+      // 该参数, 直接 exit 2 空输出, 快速通道上线以来从未真正生效过。
       final r = await Process.run(
         exe,
         [
           '-s',
-          '--compressed',
           '--max-time',
           '20',
           if (proxy != null) ...['-x', 'http://${proxy.host}:${proxy.port}'],
@@ -253,8 +254,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       );
       final body = r.stdout.toString();
       final page = _consumeListBody(body);
-      if (page == null && body.contains('challenge-platform')) {
-        KazumiLogger().w('DirectSearch: curl fast path got challenge page');
+      if (page != null) {
+        KazumiLogger().i(
+            'DirectSearch: curl fast path ok, ${page.cards.length} cards');
+      } else {
+        KazumiLogger().w(
+            'DirectSearch: curl fast path null | exit=${r.exitCode} len=${body.length} challenge=${body.contains('challenge-platform')} stderr=${r.stderr.toString().trim()}');
       }
       return page;
     } catch (e) {

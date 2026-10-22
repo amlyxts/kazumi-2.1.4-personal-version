@@ -50,8 +50,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     with KazumiDialogOwner {
   final PluginsController _pluginsController = inject<PluginsController>();
 
-  /// 浏览目标站点首页 (卡片结构解析基准)。当前指向 HanimeOne 规则源。
-  static const String _siteBase = 'https://hanime1.me/';
+  /// 浏览目标站点首页 (卡片结构解析基准), 站名在设置里配置不写入代码。
+  String get _siteBase {
+    final v = GStorage.getSetting(SettingsKeys.directSearchSite).trim();
+    return v.isEmpty ? '' : v.replaceAll(RegExp(r'/+$'), '') + '/';
+  }
   static const List<String> _genres = [
     '裏番',
     '泡麵番',
@@ -209,6 +212,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   }
 
   Future<void> _loadBrowse({required bool reset, int page = 1}) async {
+    if (_siteBase.isEmpty) {
+      setState(() => _error = '未配置浏览站点: 网络设置 → 源直连浏览站点');
+      return;
+    }
     if (_loading) return;
     setState(() {
       _loading = true;

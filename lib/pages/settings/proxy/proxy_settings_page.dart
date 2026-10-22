@@ -152,6 +152,25 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
             ],
           ),
           SettingsSection(
+            title: const Text('源直连浏览站点'),
+            tiles: [
+              SettingsTile(
+                leading: Icons.travel_explore_rounded,
+                onPressed: (_) => _editFlareSolverrField(
+                  title: '源直连浏览站点',
+                  settingKey: SettingsKeys.directSearchSite,
+                  hint: 'https://<站点首页>',
+                ),
+                title: const Text('浏览站点首页'),
+                description: Text(() {
+                  final v = GStorage.getSetting(
+                      SettingsKeys.directSearchSite);
+                  return v.isEmpty ? '未配置 (源直连浏览功能关闭)' : v;
+                }()),
+              ),
+            ],
+          ),
+          SettingsSection(
             title: const Text('FlareSolverr (CF 挑战求解)'),
             tiles: [
               SettingsTile(

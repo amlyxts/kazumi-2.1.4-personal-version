@@ -464,6 +464,12 @@ class SettingsKeys {
     '',
     group: SettingGroup.proxy,
   );
+  // [my修改] 源直连浏览的站点首页 (卡片结构解析基准), 站名不写入代码。
+  static const directSearchSite = SettingKey<String>(
+    'directSearchSite',
+    '',
+    group: SettingGroup.proxy,
+  );
   static const proxyConfigured = SettingKey<bool>(
     _SettingBoxKey.proxyConfigured,
     false,

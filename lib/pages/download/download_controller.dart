@@ -7,6 +7,7 @@ import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/repositories/download_repository.dart';
 import 'package:kazumi/services/download/background_download_service.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/download/download_manager.dart';
 import 'package:kazumi/utils/format.dart';
 import 'package:kazumi/services/logging/logger.dart';
@@ -572,17 +573,34 @@ abstract class _DownloadController with Store {
           'DownloadController: resolving video URL for episode ${request.episodeNumber} from $fullUrl');
 
       String? m3u8Url;
-      try {
-        if (lease.isCancelled) {
-          throw const VideoSourceCancelledException();
+      // [my修改] FlareSolverr 优先 (插件开关): 播放页服务端渲染, 正片直链
+      // 直取自 HTML, 规避嗅探误抓广告与 WebView 过盾耗时; 失败回退嗅探。
+      if (plugin.resolveViaFlareSolverr) {
+        try {
+          final fsSource = await FlareSolverrService.resolveVideo(fullUrl);
+          if (fsSource != null && fsSource.url.isNotEmpty) {
+            m3u8Url = fsSource.url;
+            KazumiLogger().i(
+                'DownloadController: resolved via FlareSolverr for episode ${request.episodeNumber}');
+          }
+        } catch (e) {
+          KazumiLogger().w(
+              'DownloadController: FlareSolverr resolve failed, falling back',
+              error: e);
         }
-        final source = await lease.resolve(
-          fullUrl,
-          useLegacyParser: plugin.useLegacyParser,
-          timeout: const Duration(seconds: 30),
-        );
-        m3u8Url = source.url;
-      } on VideoSourceTimeoutException {
+      }
+      if (m3u8Url == null || m3u8Url.isEmpty) {
+        try {
+          if (lease.isCancelled) {
+            throw const VideoSourceCancelledException();
+          }
+          final source = await lease.resolve(
+            fullUrl,
+            useLegacyParser: plugin.useLegacyParser,
+            timeout: const Duration(seconds: 30),
+          );
+          m3u8Url = source.url;
+        } on VideoSourceTimeoutException {
         if (lease.isCancelled) {
           wasCancelled = true;
         } else {

@@ -11,6 +11,7 @@ import 'package:kazumi/modules/download/download_module.dart';
 import 'package:kazumi/modules/history/history_module.dart';
 import 'package:kazumi/repositories/download_repository.dart';
 import 'package:kazumi/services/download/download_manager.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/video_source/services.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:mobx/mobx.dart';
@@ -691,12 +692,33 @@ abstract class _VideoPageController with Store implements Disposable {
       }
     });
 
+    // [my修改] FlareSolverr 优先: 播放页服务端渲染, 正片直链直取自 HTML,
+    // 规避页面动态广告视频被嗅探误抓 (该站实测正片源唯一, 无广告视频源)。
+    VideoSource? flareSource;
+    if (currentPlugin.resolveViaFlareSolverr) {
+      try {
+        flareSource = await FlareSolverrService.resolveVideo(url,
+            offset: offset);
+        if (flareSource != null && session.isStale) return;
+        if (flareSource != null) {
+          _finishLoading();
+          KazumiLogger().i(
+              'VideoPageController: resolved via FlareSolverr: ${flareSource.url}');
+        }
+      } catch (error) {
+        KazumiLogger().w(
+            'VideoPageController: FlareSolverr resolve failed, falling back to sniffing',
+            error: error);
+      }
+    }
+
     try {
-      final source = await _videoSourceService!.resolve(
-        url,
-        useLegacyParser: currentPlugin.useLegacyParser,
-        offset: offset,
-      );
+      final source = flareSource ??
+          await _videoSourceService!.resolve(
+            url,
+            useLegacyParser: currentPlugin.useLegacyParser,
+            offset: offset,
+          );
 
       if (session.isStale) {
         return;

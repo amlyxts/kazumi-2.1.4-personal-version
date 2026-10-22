@@ -31,6 +31,8 @@ class Plugin {
 
   /// Legacy schema field retained for rule import/export compatibility.
   bool useWebview;
+  // [my修改] 解析走 FlareSolverr (服务端渲染页面直取正片直链, 规避嗅探误抓广告)
+  bool resolveViaFlareSolverr;
 
   /// Legacy schema field retained for rule import/export compatibility.
   bool useNativePlayer;
@@ -59,6 +61,7 @@ class Plugin {
     required this.version,
     required this.muliSources,
     required this.useWebview,
+    this.resolveViaFlareSolverr = false,
     required this.useNativePlayer,
     required this.usePost,
     required this.useLegacyParser,
@@ -89,6 +92,8 @@ class Plugin {
       version: json['version']?.toString() ?? '',
       muliSources: json['muliSources'] as bool? ?? true,
       useWebview: json['useWebview'] as bool? ?? true,
+      resolveViaFlareSolverr:
+          json['resolveViaFlareSolverr'] as bool? ?? false,
       useNativePlayer: json['useNativePlayer'] as bool? ?? true,
       usePost: json['usePost'] ?? false,
       useLegacyParser: json['useLegacyParser'] ?? false,
@@ -159,6 +164,7 @@ class Plugin {
       'version': version,
       'muliSources': muliSources,
       'useWebview': useWebview,
+      'resolveViaFlareSolverr': resolveViaFlareSolverr,
       'useNativePlayer': useNativePlayer,
       'usePost': usePost,
       'useLegacyParser': useLegacyParser,

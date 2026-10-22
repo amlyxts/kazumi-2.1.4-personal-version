@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/services/video_source/video_source_service.dart';
 
 class FlareSolverrSolution {
   FlareSolverrSolution({
@@ -51,6 +52,38 @@ class FlareSolverrService {
   }
 
   static bool get isConfigured => _baseUrl != null;
+
+  /// [my修改] 渲染播放页并提取主播放器正片直链 (质量取最高)。
+  /// 该站页面为服务端渲染, 正片 mp4 直链写在 HTML 里; 页面上混有广告视频
+  /// (动态注入), 嗅探会误抓 —— 直取直链从机制上规避广告。
+  /// 返回 null = 未配置/求解失败/页面里没有正片直链 (调用方回退嗅探)。
+  static Future<VideoSource?> resolveVideo(String url, {int offset = 0}) async {
+    final solution = await solve(url);
+    if (solution == null) return null;
+    final html = solution.html;
+    final pattern = RegExp(
+        r'https://vdownload\.hembed\.com/[^\s"<>]+?-(\d{3,4})p\.mp4\?secure=[^\s"<>,]+');
+    String? best;
+    int bestQuality = -1;
+    for (final m in pattern.allMatches(html)) {
+      final quality = int.tryParse(m.group(1) ?? '') ?? 0;
+      if (quality > bestQuality) {
+        bestQuality = quality;
+        best = m.group(0);
+      }
+    }
+    if (best == null) {
+      KazumiLogger().w('FlareSolverr: 播放页未解析出正片直链');
+      return null;
+    }
+    KazumiLogger().i(
+        'FlareSolverr: 正片直链 (${bestQuality}p) ${best.substring(0, best.indexOf('?secure='))}');
+    return VideoSource(
+      url: best,
+      offset: offset,
+      type: VideoSourceType.online,
+    );
+  }
 
   /// 交给 FlareSolverr 渲染目标页; 失败/未配置返回 null, 由调用方回退。
   static Future<FlareSolverrSolution?> solve(String url) async {

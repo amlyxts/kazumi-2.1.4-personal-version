@@ -17,6 +17,7 @@ import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/plugin/plugin_cookie_manager.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/video_source/video_source_service.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/video_source/webview_video_source_service.dart';
 import 'package:kazumi/utils/http_headers.dart';
 import 'package:path_provider/path_provider.dart';
@@ -186,12 +187,26 @@ Future<(Map<String, dynamic>, int)> _runQa(
     stdout.writeln('  [WebView] $log');
   });
   VideoSource source;
+  // [my修改] FlareSolverr 优先: 正片直链直取自 HTML, 规避嗅探误抓广告
+  VideoSource? flareSource;
+  if (plugin.resolveViaFlareSolverr) {
+    try {
+      flareSource = await FlareSolverrService.resolveVideo(episodeUrl);
+      if (flareSource != null) {
+        final cut = flareSource.url.indexOf('?secure=');
+        stdout.writeln('  [FlareSolverr] 正片直链: ${flareSource.url.substring(0, cut > 0 ? cut : flareSource.url.length)}');
+      }
+    } catch (error) {
+      stdout.writeln('  [FlareSolverr] 解析失败, 回退嗅探: $error');
+    }
+  }
   try {
-    source = await service.resolve(
-      episodeUrl,
-      useLegacyParser: plugin.useLegacyParser,
-      timeout: Duration(seconds: options.resolveTimeoutSeconds),
-    );
+    source = flareSource ??
+        await service.resolve(
+          episodeUrl,
+          useLegacyParser: plugin.useLegacyParser,
+          timeout: Duration(seconds: options.resolveTimeoutSeconds),
+        );
   } on VideoSourceTimeoutException {
     return (
       _fail('resolve-timeout', '直链嗅探超时 (${options.resolveTimeoutSeconds}s)'),

@@ -30,5 +30,7 @@ final MenuRoute menu = MenuRoute([
   MenuRouteItem(path: '/collect'),
   // [my修改] 本地视频页签 (仅桌面端)
   if (kSupportsLocalVideo) MenuRouteItem(path: '/local_video'),
+  // [my修改] 源直连搜索页签
+  MenuRouteItem(path: '/direct_search'),
   MenuRouteItem(path: '/my'),
 ]);

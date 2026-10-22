@@ -8,6 +8,7 @@ import 'package:kazumi/pages/info/info_module.dart';
 import 'package:kazumi/pages/init_page.dart';
 import 'package:kazumi/pages/my/my_module.dart';
 import 'package:kazumi/pages/video/local_video_module.dart';
+import 'package:kazumi/pages/direct_search/direct_search_module.dart';
 import 'package:kazumi/pages/onboarding/onboarding_page.dart';
 import 'package:kazumi/pages/popular/popular_controller.dart';
 import 'package:kazumi/pages/popular/popular_module.dart';
@@ -64,6 +65,8 @@ final tabModule = createModule(
             ..module(collectModule)
             // [my修改] 本地视频页签 (仅桌面端注册, 移动端隐藏入口)
             ..module(localVideoModule)
+            // [my修改] 源直连搜索页签 (R18 规则源入口, 绕过 Bangumi 搜索过滤)
+            ..module(directSearchModule)
             ..module(myModule);
         },
       );

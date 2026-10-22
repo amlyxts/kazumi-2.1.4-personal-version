@@ -1,8 +1,8 @@
 // [my修改] 源直连浏览与搜索: 绕过 Bangumi 直接使用规则源 (R18 场景,
 // Bangumi 搜索被官方过滤无入口)。
-// 浏览: 源站首页最新流 + 分区 chips, 封面墙 + 翻页 (FlareSolverr 过盾取页,
-// 凭证播种后走 dio 快速通道; 站点轮换视频 CDN 域名, 解析按播放器元素定位)。
-// 搜索: 关键词走站内搜索, 同一卡片解析; 带 Bangumi 令牌时并行匹配里番评分。
+// 浏览: 源站目录页 + 分区 chips + 標籤多选 + 封面墙 + 翻页 (FlareSolverr
+// 过盾取页, 凭证播种后走 dio 快速通道; 站点轮换视频 CDN 域名, 解析按播放器
+// 元素定位)。
 // 播放: 取集 → 伪 bangumi 条目 (md5 稳定 id, 与本地视频模式同构)。
 import 'dart:convert';
 
@@ -39,6 +39,17 @@ class _ListPage {
   final int? nextPage;
 }
 
+class _BangumiRef {
+  _BangumiRef({
+    required this.subjectId,
+    required this.score,
+    required this.votes,
+  });
+  final String subjectId;
+  final double score;
+  final String votes;
+}
+
 class DirectSearchPage extends StatefulWidget {
   const DirectSearchPage({super.key});
 
@@ -55,6 +66,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     final v = GStorage.getSetting(SettingsKeys.directSearchSite).trim();
     return v.isEmpty ? '' : v.replaceAll(RegExp(r'/+$'), '') + '/';
   }
+
   static const List<String> _genres = [
     '裏番',
     '泡麵番',
@@ -69,7 +81,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   Plugin? _selectedPlugin;
   final TextEditingController _keywordController = TextEditingController();
-  String _genre = '最新'; // '最新' = 站点首页流
+  String _genre = '最新'; // '最新' = 全站目录页
+  final Set<String> _activeTags = {};
   int _page = 1;
   int? _nextPage;
   List<_BrowseCard> _cards = [];
@@ -80,11 +93,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   String? _fsCookies;
   String? _fsUA;
 
-  // 站点标签表 (从搜索/浏览页的 #tags 模态框提取, 动态更新) 与当前选中标签
+  // 站点标签表 (从搜索/浏览页的 #tags 模态框提取, 动态更新)
   List<String> _siteTags = [];
-  String? _activeTag;
 
-  // 搜索模式状态 (加载/错误与浏览模式共用 _loading/_error)
+  // Bangumi 里番评分匹配 (搜索关键词模式)
   final Map<String, _BangumiRef> _bangumiRefs = {};
   bool _bangumiQuerying = false;
 
@@ -94,7 +106,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     final plugins = _pluginsController.pluginList;
     if (plugins.isNotEmpty) _selectedPlugin = plugins.first;
     WidgetsBinding.instance
-        .addPostFrameCallback((_) => _loadBrowse(reset: true));
+        .addPostFrameCallback((_) => _loadList(reset: true));
   }
 
   /// 归一化标题 (匹配用)
@@ -156,18 +168,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
           !body.contains('video-item-container')) {
         return null; // 又被挑战了
       }
-      return _parseCards(body, url);
+      return _parseCards(body);
     } catch (_) {
       return null;
     }
-  }
-
-  Future<_ListPage?> _fetchViaFlareSolverr(String url) async {
-    final solution = await FlareSolverrService.solve(url);
-    if (solution == null) return null;
-    _fsCookies = solution.cookieString;
-    _fsUA = solution.userAgent;
-    return _parseCards(solution.html, url);
   }
 
   /// 从 HTML 提取站点标签表 (#tags 模态框的 tags[] 复选框值)
@@ -183,11 +187,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
-  Future<_ListPage?> _fetchList(String url) async {
-    final viaDio = await _fetchViaDio(url);
-    if (viaDio != null && viaDio.cards.isNotEmpty) {
-      return viaDio;
-    }
+  Future<_ListPage?> _fetchViaFlareSolverr(String url) async {
     final solution = await FlareSolverrService.solve(url);
     if (solution == null) return null;
     _fsCookies = solution.cookieString;
@@ -196,16 +196,22 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       final tags = _parseTags(solution.html);
       if (tags.isNotEmpty && mounted) setState(() => _siteTags = tags);
     }
-    return _parseCards(solution.html, url);
+    return _parseCards(solution.html);
   }
 
-  /// 解析卡片列表与翻页。卡片: video-item-container + watch?v= 锚点
-  /// (赞助卡无 watch 锚点, 谓词排除); 翻页: 页码链接最大值。
-  _ListPage? _parseCards(String html, String pageUrl) {
+  Future<_ListPage?> _fetchList(String url) async {
+    final viaDio = await _fetchViaDio(url);
+    if (viaDio != null && viaDio.cards.isNotEmpty) return viaDio;
+    return _fetchViaFlareSolverr(url);
+  }
+
+  /// 解析卡片列表与翻页。锚点直选模式: 引擎不支持谓词内后代轴
+  /// (.//a[...]), 用单元素双简单谓词选取正片锚点 (赞助卡无 watch 锚点,
+  /// 天然排除); 封面取 img 元素属性; 翻页取页码链接最大值。
+  _ListPage? _parseCards(String html) {
     try {
       final root = html_parser.parse(html).documentElement!;
       final cards = <_BrowseCard>[];
-      // 引擎不支持谓词内后代轴 (.//a[...]), 用锚点直选 + 单元素双简单谓词
       final anchors = root.queryXPath(
           '//a[contains(@class,"video-link")][contains(@href,"watch?v=")]');
       for (final node in anchors.nodes) {
@@ -229,7 +235,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
           .map((m) => int.tryParse(m.group(1)!) ?? 0)
           .toList();
       if (pageLinks.isNotEmpty) next = pageLinks.reduce((a, b) => a > b ? a : b);
-      final current = RegExp(r'[?&]page=(\d+)').firstMatch(pageUrl);
+      final current = RegExp(r'[?&]page=(\d+)').firstMatch(_lastFetchedUrl);
       final cur = current != null ? int.tryParse(current.group(1)!) ?? 1 : 1;
       return _ListPage(cards: cards, currentPage: cur, nextPage: next);
     } catch (e) {
@@ -238,28 +244,34 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
-  Future<void> _loadBrowse({required bool reset, int page = 1}) async {
+  String _lastFetchedUrl = '';
+
+  /// 构建当前列表 URL: 标签优先 > 分区 > 全站目录
+  String _listUrlFor() {
+    if (_activeTags.isNotEmpty) {
+      final tagParams = _activeTags
+          .map((t) => 'tags%5B%5D=${Uri.encodeComponent(t)}')
+          .join('&');
+      return '$_siteBase/search?$tagParams';
+    }
+    if (_genre == '最新') return '$_siteBase/search';
+    return '$_siteBase/search?genre=${Uri.encodeComponent(_genre)}';
+  }
+
+  Future<void> _loadList({required bool reset, int page = 1}) async {
     if (_siteBase.isEmpty) {
       setState(() => _error = '未配置浏览站点: 网络设置 → 源直连浏览站点');
       return;
     }
     if (_loading) return;
+    var url = _listUrlFor();
+    if (page > 1) url += '&page=$page';
+    _lastFetchedUrl = url;
     setState(() {
       _loading = true;
       _error = null;
       if (reset) _cards = [];
     });
-    var url;
-    if (_activeTag != null) {
-      // 标签检索: /search?tags[]=标签
-      url = '$_siteBase/search?tags%5B%5D=${Uri.encodeComponent(_activeTag!)}';
-    } else if (_genre == '最新') {
-      // 全站目录页 (自带 #tags 模态框 → 首次加载即可提取标签表)
-      url = '$_siteBase/search';
-    } else {
-      url = '$_siteBase/search?genre=${Uri.encodeComponent(_genre)}';
-    }
-    if (page > 1) url += '&page=$page';
     final listPage = await _fetchList(url);
     if (!mounted) return;
     setState(() {
@@ -275,11 +287,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     });
   }
 
-  Future<void> _nextPageLoad() => _loadBrowse(reset: false, page: _page + 1);
+  Future<void> _nextPageLoad() => _loadList(reset: false, page: _page + 1);
   Future<void> _prevPageLoad() =>
-      _page > 1 ? _loadBrowse(reset: false, page: _page - 1) : Future.value();
+      _page > 1 ? _loadList(reset: false, page: _page - 1) : Future.value();
 
-  // ====== 搜索模式 (站内搜索) ======
+  // ====== 搜索模式 (站内关键词, 走同一卡片解析) ======
 
   Future<void> _search() async {
     final keyword = _keywordController.text.trim();
@@ -289,8 +301,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       _error = null;
       _bangumiRefs.clear();
     });
-    final url =
-        '$_siteBase/search?query=${Uri.encodeComponent(keyword)}';
+    final url = '$_siteBase/search?query=${Uri.encodeComponent(keyword)}';
     final listPage = await _fetchList(url);
     if (!mounted) return;
     setState(() {
@@ -396,6 +407,88 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     });
   }
 
+  // ====== 标签多选弹窗 ======
+
+  Future<void> _showTagPicker() async {
+    final selected = Set<String>.from(_activeTags);
+    final filterController = TextEditingController();
+    var visible = List<String>.from(_siteTags)..sort();
+    await KazumiDialog.show(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          void applyFilter(String v) {
+            setDialogState(() {
+              visible = _siteTags
+                  .where((t) => v.trim().isEmpty || t.contains(v.trim()))
+                  .toList()
+                ..sort();
+            });
+          }
+
+          return AlertDialog(
+            title: const Text('選擇標籤'),
+            content: SizedBox(
+              width: 460,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: filterController,
+                    decoration: const InputDecoration(hintText: '篩選標籤…'),
+                    onChanged: applyFilter,
+                  ),
+                  const SizedBox(height: 8),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 2,
+                        children: [
+                          for (final t in visible)
+                            FilterChip(
+                              label: Text(t,
+                                  style: const TextStyle(fontSize: 12)),
+                              selected: selected.contains(t),
+                              onSelected: (_) => setDialogState(() =>
+                                  selected.contains(t)
+                                      ? selected.remove(t)
+                                      : selected.add(t)),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  selected.clear();
+                  KazumiDialog.dismiss();
+                },
+                child: Text('清除',
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.outline)),
+              ),
+              TextButton(
+                onPressed: KazumiDialog.dismiss,
+                child: const Text('確定'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      _activeTags
+        ..clear()
+        ..addAll(selected);
+    });
+    await _loadList(reset: true);
+  }
+
   // ====== UI ======
 
   @override
@@ -418,7 +511,13 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                       for (final p in plugins)
                         DropdownMenuItem(value: p, child: Text(p.name)),
                     ],
-                    onChanged: (p) => setState(() => _selectedPlugin = p),
+                    onChanged: (p) {
+                      setState(() {
+                        _selectedPlugin = p;
+                        _activeTags.clear();
+                      });
+                      _loadList(reset: true);
+                    },
                     hint: const Text('选择规则源'),
                   ),
                 ),
@@ -440,6 +539,36 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ],
             ),
           ),
+          if (_siteTags.isNotEmpty)
+            SizedBox(
+              height: 48,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ActionChip(
+                      avatar: const Icon(Icons.sell_outlined, size: 16),
+                      label:
+                          const Text('標籤', style: TextStyle(fontSize: 12)),
+                      onPressed: _showTagPicker,
+                    ),
+                  ),
+                  for (final t in _activeTags)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: InputChip(
+                        label: Text(t, style: const TextStyle(fontSize: 12)),
+                        onDeleted: () {
+                          setState(() => _activeTags.remove(t));
+                          _loadList(reset: true);
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
           if (_bangumiQuerying)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
@@ -447,56 +576,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 alignment: Alignment.centerLeft,
                 child: Text('正在匹配 Bangumi 评分…',
                     style: TextStyle(fontSize: 12)),
-              ),
-            ),
-          SizedBox(
-            height: 48,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [
-                for (final g in ['最新', ..._genres])
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: ChoiceChip(
-                      label: Text(g),
-                      selected: _genre == g,
-                      onSelected: (_) {
-                        setState(() => _genre = g);
-                        _loadBrowse(reset: true);
-                      },
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          if (_siteTags.isNotEmpty)
-            SizedBox(
-              height: 44,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 4),
-                    child: Center(
-                        child: Text('標籤:',
-                            style: TextStyle(fontSize: 12))),
-                  ),
-                  for (final t in _siteTags)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: ChoiceChip(
-                        label: Text(t, style: const TextStyle(fontSize: 12)),
-                        selected: _activeTag == t,
-                        onSelected: (_) {
-                          setState(
-                              () => _activeTag = _activeTag == t ? null : t);
-                          _loadBrowse(reset: true);
-                        },
-                      ),
-                    ),
-                ],
               ),
             ),
           if (_loading)
@@ -512,7 +591,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                             color: Theme.of(context).colorScheme.error)),
                     const SizedBox(height: 8),
                     FilledButton.tonal(
-                      onPressed: () => _loadBrowse(reset: true),
+                      onPressed: () => _loadList(reset: true),
                       child: const Text('重试'),
                     ),
                   ],
@@ -537,8 +616,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   final ref = _refFor(card);
                   return InkWell(
                     borderRadius: BorderRadius.circular(8),
-                    // 点卡片: 有 bgm 匹配 → 打开条目详情页 (评分/评论);
-                    // 无匹配 → 直接播放
                     onTap: () {
                       final r = _refFor(card);
                       if (r != null) {
@@ -625,8 +702,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   ),
                   Text('第 $_page 页'),
                   IconButton(
-                    onPressed:
-                        _nextPage != null ? _nextPageLoad : null,
+                    onPressed: _nextPage != null ? _nextPageLoad : null,
                     icon: const Icon(Icons.chevron_right),
                   ),
                 ],
@@ -636,15 +712,4 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       ),
     );
   }
-}
-
-class _BangumiRef {
-  _BangumiRef({
-    required this.subjectId,
-    required this.score,
-    required this.votes,
-  });
-  final String subjectId;
-  final double score;
-  final String votes;
 }

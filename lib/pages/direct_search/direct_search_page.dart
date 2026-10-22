@@ -80,6 +80,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   String? _fsCookies;
   String? _fsUA;
 
+  // 站点标签表 (从搜索/浏览页的 #tags 模态框提取, 动态更新) 与当前选中标签
+  List<String> _siteTags = [];
+  String? _activeTag;
+
   // 搜索模式状态 (加载/错误与浏览模式共用 _loading/_error)
   final Map<String, _BangumiRef> _bangumiRefs = {};
   bool _bangumiQuerying = false;
@@ -166,10 +170,33 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     return _parseCards(solution.html, url);
   }
 
+  /// 从 HTML 提取站点标签表 (#tags 模态框的 tags[] 复选框值)
+  List<String> _parseTags(String html) {
+    try {
+      return RegExp(r'name="tags\[\]"[^>]*value="([^"]+)"')
+          .allMatches(html)
+          .map((m) => m.group(1)!)
+          .where((v) => v.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   Future<_ListPage?> _fetchList(String url) async {
     final viaDio = await _fetchViaDio(url);
-    if (viaDio != null && viaDio.cards.isNotEmpty) return viaDio;
-    return _fetchViaFlareSolverr(url);
+    if (viaDio != null && viaDio.cards.isNotEmpty) {
+      return viaDio;
+    }
+    final solution = await FlareSolverrService.solve(url);
+    if (solution == null) return null;
+    _fsCookies = solution.cookieString;
+    _fsUA = solution.userAgent;
+    if (_siteTags.isEmpty) {
+      final tags = _parseTags(solution.html);
+      if (tags.isNotEmpty && mounted) setState(() => _siteTags = tags);
+    }
+    return _parseCards(solution.html, url);
   }
 
   /// 解析卡片列表与翻页。卡片: video-item-container + watch?v= 锚点
@@ -222,9 +249,14 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       _error = null;
       if (reset) _cards = [];
     });
-    var url = _genre == '最新'
-        ? _siteBase
-        : '$_siteBase/search?genre=${Uri.encodeComponent(_genre)}';
+    var url;
+    if (_activeTag != null) {
+      url = '$_siteBase/search?tags%5B%5D=${Uri.encodeComponent(_activeTag!)}';
+    } else if (_genre == '最新') {
+      url = _siteBase;
+    } else {
+      url = '$_siteBase/search?genre=${Uri.encodeComponent(_genre)}';
+    }
     if (page > 1) url += '&page=$page';
     final listPage = await _fetchList(url);
     if (!mounted) return;
@@ -436,6 +468,35 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ],
             ),
           ),
+          if (_siteTags.isNotEmpty)
+            SizedBox(
+              height: 44,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Center(
+                        child: Text('標籤:',
+                            style: TextStyle(fontSize: 12))),
+                  ),
+                  for (final t in _siteTags)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: ChoiceChip(
+                        label: Text(t, style: const TextStyle(fontSize: 12)),
+                        selected: _activeTag == t,
+                        onSelected: (_) {
+                          setState(
+                              () => _activeTag = _activeTag == t ? null : t);
+                          _loadBrowse(reset: true);
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
           if (_loading)
             const Expanded(child: Center(child: CircularProgressIndicator()))
           else if (_error != null)

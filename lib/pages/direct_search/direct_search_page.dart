@@ -1,25 +1,44 @@
-// [my修改] 源直连搜索: 绕过 Bangumi 直接检索规则源 (R18 场景, Bangumi 搜索
-// 被官方过滤无入口)。链路: 规则搜索 (FlareSolverr 自动过盾) → 取集 → 播放,
-// 历史记录使用伪 bangumi 条目 (md5 稳定 id, 与本地视频同构)。
-// 可选: 带 Bangumi 令牌时并行检索里番条目 (filter nsfw=true), 标题匹配者
-// 展示评分与 bgm.tv 跳转。
+// [my修改] 源直连浏览与搜索: 绕过 Bangumi 直接使用规则源 (R18 场景,
+// Bangumi 搜索被官方过滤无入口)。
+// 浏览: 源站首页最新流 + 分区 chips, 封面墙 + 翻页 (FlareSolverr 过盾取页,
+// 凭证播种后走 dio 快速通道; 站点轮换视频 CDN 域名, 解析按播放器元素定位)。
+// 搜索: 关键词走站内搜索, 同一卡片解析; 带 Bangumi 令牌时并行匹配里番评分。
+// 播放: 取集 → 伪 bangumi 条目 (md5 稳定 id, 与本地视频模式同构)。
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
+import 'package:kazumi/bean/dialog/dialog_task.dart';
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
-import 'package:kazumi/modules/search/plugin_search_module.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:html/dom.dart' as html_dom;
+import 'package:html/parser.dart' as html_parser;
+import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+class _BrowseCard {
+  _BrowseCard({required this.title, required this.href, required this.thumb});
+  final String title;
+  final String href;
+  final String thumb;
+}
+
+class _ListPage {
+  _ListPage({required this.cards, required this.currentPage, this.nextPage});
+  final List<_BrowseCard> cards;
+  final int currentPage;
+  final int? nextPage;
+}
 
 class DirectSearchPage extends StatefulWidget {
   const DirectSearchPage({super.key});
@@ -32,11 +51,36 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     with KazumiDialogOwner {
   final PluginsController _pluginsController = inject<PluginsController>();
 
+  /// 浏览目标站点首页 (卡片结构解析基准)。当前指向 HanimeOne 规则源。
+  static const String _siteBase = 'https://hanime1.me/';
+  static const List<String> _genres = [
+    '裏番',
+    '泡麵番',
+    'Motion Anime',
+    '3DCG',
+    '2D動畫',
+    'AI生成',
+    'MMD',
+    'Cosplay',
+    '新番預告',
+  ];
+
   Plugin? _selectedPlugin;
   final TextEditingController _keywordController = TextEditingController();
+  String _genre = '最新'; // '最新' = 站点首页流
+  int _page = 1;
+  int? _nextPage;
+  List<_BrowseCard> _cards = [];
+  bool _loading = false;
+  String? _error;
+
+  // FlareSolverr 播种状态 (过盾一次后, 页面翻页走 dio 快速通道)
+  String? _fsCookies;
+  String? _fsUA;
+
+  // 搜索模式状态
   bool _searching = false;
   String? _searchError;
-  List<SearchItem> _results = [];
   final Map<String, _BangumiRef> _bangumiRefs = {};
   bool _bangumiQuerying = false;
 
@@ -45,19 +89,13 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     super.initState();
     final plugins = _pluginsController.pluginList;
     if (plugins.isNotEmpty) _selectedPlugin = plugins.first;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _loadBrowse(reset: true));
   }
 
-  @override
-  void dispose() {
-    _keywordController.dispose();
-    super.dispose();
-  }
-
-  /// 归一化标题 (匹配用): 去空白/常见符号, 小写
+  /// 归一化标题 (匹配用)
   static String _normalizeTitle(String s) => s
-      .replaceAll(
-          RegExp(r'[\s　·・~\-–—「」『』【】\[\]()（）]+'),
-          '')
+      .replaceAll(RegExp(r'[\s　·・~\-–—「」『』【】\[\]()（）]+'), '')
       .toLowerCase();
 
   static int _stableDirectId(String source) {
@@ -67,10 +105,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     return int.parse(hex.substring(0, 7), radix: 16);
   }
 
-  BangumiItem _fabricatedItem(SearchItem item, Plugin plugin) {
-    final name = item.name.trim();
+  BangumiItem _fabricatedItem(_BrowseCard card) {
+    final pluginName = _selectedPlugin?.name ?? 'direct';
+    final name = card.title.trim();
     return BangumiItem(
-      id: _stableDirectId('${plugin.name}_${item.src}'),
+      id: _stableDirectId('${pluginName}_${card.href}'),
       type: 2,
       name: name,
       nameCn: name,
@@ -88,33 +127,150 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     );
   }
 
-  Future<void> _search() async {
-    final keyword = _keywordController.text.trim();
-    final plugin = _selectedPlugin;
-    if (keyword.isEmpty || plugin == null || _searching) return;
-    setState(() {
-      _searching = true;
-      _searchError = null;
-      _results = [];
-      _bangumiRefs.clear();
-    });
-    try {
-      final response = await plugin.queryBangumi(keyword, shouldRethrow: true);
-      if (!mounted) return;
-      setState(() => _results = response.data);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _searchError = error.toString();
-        _results = [];
-      });
-    } finally {
-      if (mounted) setState(() => _searching = false);
-    }
-    await _queryBangumiRefs(keyword);
+  // ====== 列表抓取 (dio 快速通道优先, 挑战时 FlareSolverr 过盾) ======
+
+  Dio _browseDio() {
+    final dio = Dio(BaseOptions(
+      connectTimeout: Duration(seconds: 15),
+      receiveTimeout: Duration(seconds: 25),
+      validateStatus: (_) => true,
+    ));
+    dio.options.headers = {
+      if (_fsUA != null) 'user-agent': _fsUA!,
+      if (_fsCookies != null) 'cookie': _fsCookies!,
+    };
+    return dio;
   }
 
-  /// 带 Bangumi 令牌的里番条目检索 (filter nsfw=true), 按归一化标题匹配源结果
+  Future<_ListPage?> _fetchViaDio(String url) async {
+    if (_fsCookies == null) return null;
+    try {
+      final resp = await _browseDio().get(url);
+      if (resp.statusCode != 200) return null;
+      final body = resp.data.toString();
+      if (body.contains('challenge-platform') &&
+          !body.contains('video-item-container')) {
+        return null; // 又被挑战了
+      }
+      return _parseCards(body, url);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<_ListPage?> _fetchViaFlareSolverr(String url) async {
+    final solution = await FlareSolverrService.solve(url);
+    if (solution == null) return null;
+    _fsCookies = solution.cookieString;
+    _fsUA = solution.userAgent;
+    return _parseCards(solution.html, url);
+  }
+
+  Future<_ListPage?> _fetchList(String url) async {
+    final viaDio = await _fetchViaDio(url);
+    if (viaDio != null && viaDio.cards.isNotEmpty) return viaDio;
+    return _fetchViaFlareSolverr(url);
+  }
+
+  /// 解析卡片列表与翻页。卡片: video-item-container + watch?v= 锚点
+  /// (赞助卡无 watch 锚点, 谓词排除); 翻页: 页码链接最大值。
+  _ListPage? _parseCards(String html, String pageUrl) {
+    try {
+      final root = html_parser.parse(html).documentElement!;
+      final cards = <_BrowseCard>[];
+      final containers = root.queryXPath(
+          '//div[contains(@class,"video-item-container")][.//a[contains(@href,"watch?v=")]]');
+      for (final node in containers.nodes) {
+        final element = node as html_dom.Element;
+        final anchor = element.queryXPath('.//a[contains(@class,"video-link")]').node;
+        if (anchor == null) continue;
+        final href = anchor.attributes['href'] ?? '';
+        if (!href.contains('watch?v=')) continue;
+        final titleNode =
+            element.queryXPath('.//div[contains(@class,"title")]/text()').node;
+        final title = (titleNode?.text ?? element.attributes['title'] ?? '')
+            .trim();
+        final thumb =
+            element.queryXPath('.//img[contains(@class,"main-thumb")]/@src').node;
+        cards.add(_BrowseCard(
+          title: title,
+          href: href,
+          thumb: thumb?.text ?? '',
+        ));
+      }
+      if (cards.isEmpty) return null;
+      int? next;
+      final pageLinks = RegExp(r'[?&]page=(\d+)')
+          .allMatches(html)
+          .map((m) => int.tryParse(m.group(1)!) ?? 0)
+          .toList();
+      if (pageLinks.isNotEmpty) next = pageLinks.reduce((a, b) => a > b ? a : b);
+      final current = RegExp(r'[?&]page=(\d+)').firstMatch(pageUrl);
+      final cur = current != null ? int.tryParse(current.group(1)!) ?? 1 : 1;
+      return _ListPage(cards: cards, currentPage: cur, nextPage: next);
+    } catch (e) {
+      KazumiLogger().w('DirectSearch: parse cards failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _loadBrowse({required bool reset, int page = 1}) async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      if (reset) _cards = [];
+    });
+    var url = _genre == '最新'
+        ? _siteBase
+        : '$_siteBase/search?genre=${Uri.encodeComponent(_genre)}';
+    if (page > 1) url += '&page=$page';
+    final listPage = await _fetchList(url);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      if (listPage == null) {
+        _error = '加载失败 (过盾失败或站点不可达), 请重试';
+        if (reset) _cards = [];
+      } else {
+        _cards = listPage.cards;
+        _nextPage = listPage.nextPage;
+        _page = page;
+      }
+    });
+  }
+
+  Future<void> _nextPageLoad() => _loadBrowse(reset: false, page: _page + 1);
+  Future<void> _prevPageLoad() =>
+      _page > 1 ? _loadBrowse(reset: false, page: _page - 1) : Future.value();
+
+  // ====== 搜索模式 (站内搜索) ======
+
+  Future<void> _search() async {
+    final keyword = _keywordController.text.trim();
+    if (keyword.isEmpty || _loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _bangumiRefs.clear();
+    });
+    final url =
+        '$_siteBase/search?query=${Uri.encodeComponent(keyword)}';
+    final listPage = await _fetchList(url);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _cards = listPage?.cards ?? [];
+      if (listPage == null) {
+        _error = '加载失败 (过盾失败或站点不可达), 请重试';
+      }
+    });
+    if (listPage != null && listPage.cards.isNotEmpty) {
+      await _queryBangumiRefs(keyword);
+    }
+  }
+
+  /// 带 Bangumi 令牌的里番条目检索 (filter nsfw=true), 按归一化标题匹配
   Future<void> _queryBangumiRefs(String keyword) async {
     final token = GStorage.getSetting(SettingsKeys.bangumiAccessToken).trim();
     if (token.isEmpty) return;
@@ -153,45 +309,14 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
-  _BangumiRef? _refFor(SearchItem item) {
-    final key = _normalizeTitle(item.name);
+  _BangumiRef? _refFor(_BrowseCard card) {
+    final key = _normalizeTitle(card.title);
     if (_bangumiRefs.containsKey(key)) return _bangumiRefs[key];
     for (final e in _bangumiRefs.entries) {
       if (e.key.isEmpty) continue;
       if (key.contains(e.key) || e.key.contains(key)) return e.value;
     }
     return null;
-  }
-
-  Future<void> _play(SearchItem item) async {
-    final plugin = _selectedPlugin;
-    if (plugin == null || dialogs.isRunning) return;
-    final fabricated = _fabricatedItem(item, plugin);
-    await dialogs.run((task) async {
-      final roads = await task.loading(
-        message: '正在获取播放列表',
-        barrierDismissible: isDesktop(),
-        action: () => plugin.queryChapterRoads(item.src),
-      );
-      if (roads.isEmpty) {
-        throw Exception('未获取到播放线路');
-      }
-      if (mounted) {
-        task.withContext((context) => context.pushNamed(
-              '/video/',
-              arguments: OnlineVideoPlaybackArgs(
-                bangumiItem: fabricated,
-                plugin: plugin,
-                title: item.name,
-                src: item.src,
-                roads: roads,
-              ),
-            ));
-      }
-    }, onError: (error, stackTrace) {
-      KazumiLogger().w('DirectSearch: play failed', error: error);
-      KazumiDialog.showToast(message: '获取播放列表失败，请重试');
-    });
   }
 
   Future<void> _openBgmSubject(String subjectId) async {
@@ -203,11 +328,46 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
+  // ====== 播放 (卡片 → 取集 → 播放页) ======
+
+  Future<void> _play(_BrowseCard card) async {
+    final plugin = _selectedPlugin;
+    if (plugin == null || dialogs.isRunning) return;
+    final fabricated = _fabricatedItem(card);
+    await dialogs.run((task) async {
+      final roads = await task.loading(
+        message: '正在获取播放列表',
+        barrierDismissible: isDesktop(),
+        action: () => plugin.queryChapterRoads(card.href),
+      );
+      if (roads.isEmpty) {
+        throw Exception('未获取到播放线路');
+      }
+      if (mounted) {
+        task.withContext((context) => context.pushNamed(
+              '/video/',
+              arguments: OnlineVideoPlaybackArgs(
+                bangumiItem: fabricated,
+                plugin: plugin,
+                title: card.title,
+                src: card.href,
+                roads: roads,
+              ),
+            ));
+      }
+    }, onError: (error, stackTrace) {
+      KazumiLogger().w('DirectSearch: play failed', error: error);
+      KazumiDialog.showToast(message: '获取播放列表失败，请重试');
+    });
+  }
+
+  // ====== UI ======
+
   @override
   Widget build(BuildContext context) {
     final plugins = _pluginsController.pluginList;
     return SettingsDetailScaffold(
-      title: const Text('源直连搜索'),
+      title: const Text('源直连浏览'),
       body: Column(
         children: [
           Padding(
@@ -239,65 +399,131 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   ),
                 ),
                 IconButton(
-                  onPressed: _searching ? null : _search,
+                  onPressed: _loading ? null : _search,
                   icon: const Icon(Icons.search),
                 ),
               ],
             ),
           ),
-          if (_bangumiQuerying)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('正在匹配 Bangumi 评分…',
-                    style: TextStyle(fontSize: 12)),
+          SizedBox(
+            height: 48,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                for (final g in ['最新', ..._genres])
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Text(g),
+                      selected: _genre == g,
+                      onSelected: (_) {
+                        setState(() => _genre = g);
+                        _loadBrowse(reset: true);
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (_loading)
+            const Expanded(child: Center(child: CircularProgressIndicator()))
+          else if (_error != null)
+            Expanded(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error)),
+                    const SizedBox(height: 8),
+                    FilledButton.tonal(
+                      onPressed: () => _loadBrowse(reset: true),
+                      child: const Text('重试'),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else if (_cards.isEmpty)
+            const Expanded(child: Center(child: Text('无内容')))
+          else
+            Expanded(
+              child: GridView.builder(
+                padding: const EdgeInsets.all(12),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 220,
+                  childAspectRatio: 0.62,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                ),
+                itemCount: _cards.length,
+                itemBuilder: (context, index) {
+                  final card = _cards[index];
+                  final ref = _refFor(card);
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => _play(card),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              card.thumb,
+                              width: double.infinity,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
+                                child: const Center(
+                                    child: Icon(Icons.movie_outlined)),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          card.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                        if (ref != null)
+                          Text(
+                            'bgm ★${ref.score.toStringAsFixed(1)}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
               ),
             ),
-          if (_searchError != null)
+          if (!_loading && _cards.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(_searchError!,
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.error)),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    onPressed: _page > 1 ? _prevPageLoad : null,
+                    icon: const Icon(Icons.chevron_left),
+                  ),
+                  Text('第 $_page 页'),
+                  IconButton(
+                    onPressed: _nextPageLoad,
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                ],
+              ),
             ),
-          Expanded(
-            child: _searching
-                ? const Center(child: CircularProgressIndicator())
-                : _results.isEmpty
-                    ? Center(
-                        child: Text(_searchError == null
-                            ? '输入关键词搜索'
-                            : '无结果 (过盾失败时请重试一次)'))
-                    : ListView.builder(
-                        itemCount: _results.length,
-                        itemBuilder: (context, index) {
-                          final item = _results[index];
-                          final ref = _bangumiQuerying ? null : _refFor(item);
-                          return ListTile(
-                            title: Text(item.name),
-                            subtitle: ref != null
-                                ? Text(
-                                    'bgm ★${ref.score.toStringAsFixed(1)} (${ref.votes}人)',
-                                    style: TextStyle(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary),
-                                  )
-                                : null,
-                            trailing: ref != null
-                                ? IconButton(
-                                    icon: const Icon(Icons.open_in_new),
-                                    tooltip: '在 bgm.tv 打开 (评分/评论)',
-                                    onPressed: () =>
-                                        _openBgmSubject(ref.subjectId),
-                                  )
-                                : null,
-                            onTap: () => _play(item),
-                          );
-                        },
-                      ),
-          ),
         ],
       ),
     );

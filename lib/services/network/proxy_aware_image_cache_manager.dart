@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:http/io_client.dart';
-import 'package:kazumi/request/core/network_config.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/network/bangumi_ech_image_service.dart';
 import 'package:kazumi/services/network/image_acceleration.dart';
@@ -52,19 +51,18 @@ class ProxyAwareImageCacheManager extends CacheManager with ImageCacheManager {
 
   static IOClient _createHttpClient() {
     final client = HttpClient();
-    // [my修改] 白名单制与全局网络策略同源: 仅白名单域 (含源直连浏览站点) 走
-    // 代理, 其余直连 —— 封面在直连可达的视频 CDN 上, 全量走代理会绕远变慢。
-    final config = NetworkConfig.fromSettings();
-    client.findProxy = (uri) {
-      final proxy = config.proxyForUri(uri);
-      if (proxy != null) {
-        return 'PROXY ${proxy.host}:${proxy.port}';
-      }
-      return 'DIRECT';
-    };
-    if (config.allowBadCertificates) {
+    // [my修复·回退白名单直连] 实测: 封面 CDN 直连 TLS 握手 3.3s vs 代理
+    // 0.88s; bangumi 图床直连完全不通。图片必须走代理 (Clash 对国内域自动
+    // 直连, 绕本地一跳损失可忽略), 白名单直连方向相反。
+    final proxy = _currentProxy();
+    if (proxy != null) {
+      client.findProxy = (_) => 'PROXY ${proxy.$1}:${proxy.$2}';
       client.badCertificateCallback = (cert, host, port) => true;
+    } else if (Platform.isWindows) {
+      client.findProxy = SystemProxyService.findProxy;
     }
+    // HTTP/1.1 无多路复用: 限每主机连接数, 图墙复用连接而非每张图各付握手
+    client.maxConnectionsPerHost = 8;
     return IOClient(client);
   }
 

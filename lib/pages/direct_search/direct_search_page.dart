@@ -440,7 +440,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     setState(() {
       _loading = false;
       if (listPage == null) {
-        _error = '加载失败 (过盾失败或站点不可达), 请重试';
+        // 翻到末页之后 (站点对超出页返回空页/404, 整条链路拿不到卡片) 给出
+        // 与站点不可达不同的提示; 当前页内容保留不清空。
+        _error = page > 1
+            ? '后面没有更多内容了 (或站点暂时不可达)'
+            : '加载失败 (过盾失败或站点不可达), 请重试';
         if (reset) _cards = [];
       } else {
         _cards = listPage.cards;
@@ -1010,7 +1014,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   ),
                   Text('第 $_page 页'),
                   IconButton(
-                    onPressed: _nextPage != null ? _nextPageLoad : null,
+                    // _nextPage = 站点翻页条里的最大页码 (恒含末页) — 等于当前页
+                    // 即已到末页, 置灰; 否则会点进空页使整条取数链路报错。
+                    onPressed: _nextPage != null && _nextPage! > _page
+                        ? _nextPageLoad
+                        : null,
                     icon: const Icon(Icons.chevron_right),
                   ),
                 ],

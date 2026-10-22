@@ -81,6 +81,15 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   Plugin? _selectedPlugin;
   final TextEditingController _keywordController = TextEditingController();
+
+  /// 浏览/标签/卡片解析是站点结构专用的, 下拉只列出与浏览站点同域的规则源
+  List<Plugin> _usableSources() {
+    final siteHost = Uri.tryParse(_siteBase)?.host ?? '';
+    if (siteHost.isEmpty) return const [];
+    return _pluginsController.pluginList
+        .where((p) => (Uri.tryParse(p.baseUrl)?.host ?? '') == siteHost)
+        .toList();
+  }
   String _genre = '最新'; // '最新' = 全站目录页
   final Set<String> _activeTags = {};
   int _page = 1;
@@ -103,8 +112,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   @override
   void initState() {
     super.initState();
-    final plugins = _pluginsController.pluginList;
-    if (plugins.isNotEmpty) _selectedPlugin = plugins.first;
+    final usable = _usableSources();
+    if (usable.isNotEmpty) _selectedPlugin = usable.first;
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _loadList(reset: true));
   }
@@ -493,7 +502,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   @override
   Widget build(BuildContext context) {
-    final plugins = _pluginsController.pluginList;
+    final plugins = _usableSources();
     return SettingsDetailScaffold(
       title: const Text('源直连浏览'),
       body: Column(
@@ -518,7 +527,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                       });
                       _loadList(reset: true);
                     },
-                    hint: const Text('选择规则源'),
+                    hint: const Text('无匹配的规则源'),
                   ),
                 ),
                 const SizedBox(width: 12),

@@ -618,6 +618,7 @@ abstract class _DownloadController with Store {
               .e('DownloadController: WebView resolution failed', error: e);
         }
       }
+    }
 
       if (wasCancelled || lease.isCancelled) {
         return;

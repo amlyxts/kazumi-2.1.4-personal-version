@@ -482,6 +482,13 @@ class SettingsKeys {
     '',
     group: SettingGroup.proxy,
   );
+  // [my修改] 源直连浏览的手动认领 (卡片 href → bgm 条目 id/评分), 自动匹配
+  // 漏网时用户手动绑定; JSON map 落设置框, 绑定关系只存本地。
+  static const directSearchClaims = SettingKey<String>(
+    'directSearchClaims',
+    '',
+    group: SettingGroup.proxy,
+  );
   static const proxyConfigured = SettingKey<bool>(
     _SettingBoxKey.proxyConfigured,
     false,

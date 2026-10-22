@@ -122,6 +122,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   // Bangumi 里番评分匹配 (搜索关键词模式)
   final Map<String, _BangumiRef> _bangumiRefs = {};
+
+  /// 手动认领 (卡片 href → {id, score, votes}): 自动匹配漏网时手动绑定
+  /// bgm 条目, JSON 落设置框; 查找优先级高于自动匹配。
+  Map<String, Map<String, dynamic>> _claims = {};
   bool _bangumiQuerying = false;
 
   @override
@@ -144,6 +148,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
     _genre = _rememberedGenre;
     _activeTags.addAll(_rememberedTags);
+    _loadClaims();
     _collectController.loadCollectibles();
     _collectedIds.addAll(
         _collectController.collectibles.map((c) => c.bangumiItem.id));
@@ -524,6 +529,15 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   }
 
   _BangumiRef? _refFor(_BrowseCard card) {
+    // 手动认领优先: 绑定关系持久, 自动匹配是会话级的
+    final claim = _claims[card.href];
+    if (claim != null) {
+      return _BangumiRef(
+        subjectId: (claim['id'] ?? '').toString(),
+        score: (claim['score'] as num?)?.toDouble() ?? 0,
+        votes: (claim['votes'] ?? '').toString(),
+      );
+    }
     final key = _normalizeTitle(card.title);
     if (_bangumiRefs.containsKey(key)) return _bangumiRefs[key];
     for (final e in _bangumiRefs.entries) {
@@ -531,6 +545,182 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       if (key.contains(e.key) || e.key.contains(key)) return e.value;
     }
     return null;
+  }
+
+  // ====== 手动认领 (自动匹配漏网的卡片手动绑定 bgm 条目) ======
+
+  void _loadClaims() {
+    final raw = GStorage.getSetting(SettingsKeys.directSearchClaims).trim();
+    if (raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        _claims = decoded.map((k, v) =>
+            MapEntry(k.toString(), Map<String, dynamic>.from(v as Map)));
+      }
+    } catch (e) {
+      KazumiLogger().w('DirectSearch: parse claims failed: $e');
+    }
+  }
+
+  Future<void> _persistClaims() async {
+    await GStorage.putSetting(
+        SettingsKeys.directSearchClaims, jsonEncode(_claims));
+  }
+
+  Future<void> _setClaim(_BrowseCard card, Map<String, dynamic>? claim) async {
+    if (claim == null) {
+      _claims.remove(card.href);
+    } else {
+      _claims[card.href] = claim;
+    }
+    await _persistClaims();
+    if (mounted) setState(() {});
+  }
+
+  /// 认领检索: bgm v0 搜索 (含 nsfw), 选中即绑定; 已认领可解除。
+  Future<void> _showClaimSearch(_BrowseCard card) async {
+    final controller = TextEditingController(text: card.title);
+    List<Map<String, dynamic>> results = [];
+    var querying = false;
+    var searched = false;
+
+    Future<void> runSearch(
+        void Function(void Function()) setDialogState, String keyword) async {
+      final token =
+          GStorage.getSetting(SettingsKeys.bangumiAccessToken).trim();
+      if (token.isEmpty) {
+        KazumiDialog.showToast(message: '未配置 Bangumi 令牌, 无法检索');
+        return;
+      }
+      setDialogState(() => querying = true);
+      try {
+        final dio = Dio(BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 20),
+          validateStatus: (_) => true,
+        ));
+        dio.options.headers = {
+          'user-agent': 'kazumi-direct-search/1.0 (bgm claim)',
+          'authorization': 'Bearer $token',
+        };
+        final resp = await dio.post(
+          'https://api.bgm.tv/v0/search/subjects',
+          data: {'keyword': keyword, 'limit': 20, 'filter': {'nsfw': true}},
+        );
+        final data = (resp.data['data'] as List? ?? [])
+            .whereType<Map>()
+            .map((s) => Map<String, dynamic>.from(s))
+            .toList();
+        setDialogState(() {
+          results = data;
+          querying = false;
+          searched = true;
+        });
+      } catch (e) {
+        KazumiLogger().i('DirectSearch: claim search failed: $e');
+        setDialogState(() => querying = false);
+        KazumiDialog.showToast(message: '检索失败');
+      }
+    }
+
+    await KazumiDialog.show(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final current = _claims[card.href];
+          return AlertDialog(
+            title: Text('认领条目 — ${card.title}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 15)),
+            content: SizedBox(
+              width: 420,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (current != null)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.link_off, size: 20),
+                      title: Text(
+                          '已认领 bgm #${current['id']} — 点击解除认领',
+                          style: const TextStyle(fontSize: 13)),
+                      onTap: () async {
+                        await _setClaim(card, null);
+                        KazumiDialog.dismiss();
+                      },
+                    ),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        onSubmitted:
+                            (v) => runSearch(setDialogState, v),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.search),
+                      onPressed: () =>
+                          runSearch(setDialogState, controller.text),
+                    ),
+                  ]),
+                  const SizedBox(height: 8),
+                  Flexible(
+                    child: querying
+                        ? const Center(child: CircularProgressIndicator())
+                        : ListView(
+                            shrinkWrap: true,
+                            children: [
+                              for (final s in results)
+                                ListTile(
+                                  dense: true,
+                                  title: Text((s['name'] ?? '').toString(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 13)),
+                                  subtitle: Text(
+                                      '${(s['nameCn'] ?? '').toString()}  ★${((s['rating'] ?? const {})['score'] ?? 0)}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style:
+                                          const TextStyle(fontSize: 11)),
+                                  onTap: () async {
+                                    final rating = s['rating'] ?? const {};
+                                    await _setClaim(card, {
+                                      'id': (s['id'] ?? 0).toString(),
+                                      'score':
+                                          (rating['score'] as num?) ?? 0,
+                                      'votes': (rating['total'] ?? 0)
+                                          .toString(),
+                                    });
+                                    KazumiDialog.dismiss();
+                                    KazumiDialog.showToast(
+                                        message: '已认领, 收藏将同步 Bangumi');
+                                  },
+                                ),
+                              if (results.isEmpty && searched)
+                                const ListTile(
+                                    dense: true,
+                                    title: Text('无结果',
+                                        style: TextStyle(fontSize: 13))),
+                            ],
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: KazumiDialog.dismiss,
+                child: Text('关闭',
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.outline)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _openBgmSubject(String subjectId) async {
@@ -582,6 +772,16 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                     dense: true,
                     onTap: () => setDialogState(() => selectedType = 0),
                   ),
+                if (_claims[card.href] == null && _refFor(card) == null)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.inventory_2, size: 20),
+                    title: const Text('手动认领条目…',
+                        style: TextStyle(fontSize: 13)),
+                    subtitle: const Text('自动匹配未命中, 手动绑定 Bangumi 条目',
+                        style: TextStyle(fontSize: 11)),
+                    onTap: () => _showClaimSearch(card),
+                  ),
               ],
             ),
             actions: [
@@ -596,6 +796,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   final type = selectedType;
                   if (type == null || type <= 0) return;
                   final ref = _refFor(card);
+                  // 弹窗打开期间可能刚完成认领, 条目 id 会从哈希变真实条目,
+                  // 现取现用避免拿旧 id 走同步。
+                  final item = _fabricatedItem(card);
                   if (ref != null) {
                     // 匹配 bgm 条目: 走同步路径 (真实条目 id)
                     _collectController.addCollect(item, type: type);

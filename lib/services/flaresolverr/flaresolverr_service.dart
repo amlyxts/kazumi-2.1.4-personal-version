@@ -3,9 +3,11 @@
 // 配置: 设置 → 网络 → FlareSolverr (地址留空 = 功能关闭)。
 // 出口一致性: FlareSolverr 需与应用走同一代理出口 (配置代理地址指向 Clash),
 // 否则求解得到的 cf_clearance 因 IP 不匹配对应用请求无效。
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:kazumi/request/core/network_config.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/video_source/video_source_service.dart';
@@ -102,14 +104,47 @@ class FlareSolverrService {
     }
   }
 
-  /// 渲染播放页并提取主播放器正片直链 (质量取最高)。
+  /// [my提速] 系统 curl 直取 HTML。CF 按 TLS 指纹拦 dart 栈 (同 cookies/UA/
+  /// 代理下 curl 200 / dart 403), Schannel 指纹可过; cookies/UA 取过盾持久化。
+  /// 返回 null = 无持久化 cookies / curl 不可用 / 请求失败。
+  static Future<String?> curlFetch(String url) async {
+    final cookies = GStorage.getSetting(SettingsKeys.flareSolverrCookies);
+    if (cookies.isEmpty) return null;
+    final root = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+    final exe = '$root\\System32\\curl.exe';
+    if (!File(exe).existsSync()) return null;
+    try {
+      final proxy = NetworkConfig.fromSettings().proxyForUri(Uri.parse(url));
+      final ua = GStorage.getSetting(SettingsKeys.flareSolverrUA);
+      final r = await Process.run(exe, [
+        '-s',
+        '--max-time',
+        '20',
+        if (proxy != null) ...['-x', 'http://${proxy.host}:${proxy.port}'],
+        '-A',
+        ua.isNotEmpty ? ua : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        '-H',
+        'Cookie: $cookies',
+        url,
+      ], stdoutEncoding: utf8, stderrEncoding: utf8);
+      final body = r.stdout.toString();
+      if (r.exitCode != 0 || body.isEmpty) {
+        KazumiLogger().w(
+            'FlareSolverr: curl fetch null | exit=${r.exitCode} len=${body.length} stderr=${r.stderr.toString().trim()}');
+        return null;
+      }
+      return body;
+    } catch (e) {
+      KazumiLogger().w('FlareSolverr: curl fetch error: $e');
+      return null;
+    }
+  }
+
+  /// 从播放页 HTML 提取主播放器正片直链 (质量取最高)。
   /// 该站页面为服务端渲染, 正片 mp4 直链写在 HTML 里; 页面上混有广告视频
   /// (动态注入), 嗅探会误抓 —— 直取直链从机制上规避广告。
-  /// 返回 null = 未配置/求解失败/页面里没有正片直链 (调用方回退嗅探)。
-  static Future<VideoSource?> resolveVideo(String url, {int offset = 0}) async {
-    final solution = await solve(url);
-    if (solution == null) return null;
-    final html = solution.html;
+  /// 返回 null = 页面里没有正片直链 (调用方回退嗅探)。
+  static VideoSource? extractVideoFromHtml(String html, {int offset = 0}) {
     // 主播放器: <video id="player"> 内的 <source src="...">。CDN 域名会轮换
     // (实测 vdownload.hembed / cdn.emberglade 等), 按 id 定位而非域名。
     final playerMatch = RegExp(r'<video[^>]*id="player"[^>]*>(.*?)</video>',
@@ -143,12 +178,31 @@ class FlareSolverrService {
       KazumiLogger().w('FlareSolverr: 播放页未解析出正片直链');
       return null;
     }
-    KazumiLogger().i('FlareSolverr: 正片直链 (${bestQuality}p) '
-        '${best.substring(0, best.indexOf('?secure='))}');
+    // [my修复] 日志截断只认 ?secure=: CDN 轮换后直链带 ?token= 等参数时
+    // indexOf 返回 -1, substring 抛 RangeError, 把成功的解析整个炸掉回退嗅探。
+    final q = best.indexOf('?');
+    KazumiLogger().i(
+        'FlareSolverr: 正片直链 (${bestQuality}p) ${q < 0 ? best : best.substring(0, q)}');
     return VideoSource(
       url: best,
       offset: offset,
       type: VideoSourceType.online,
     );
+  }
+
+  /// 渲染播放页并提取主播放器正片直链。
+  /// [my提速] curl 直取 (~2s) 优先; cookies 失效/被挑战时提取不到直链,
+  /// 落回 FS 起浏览器求解 (~11s, 同时刷新持久化 cookies 供下次直取)。
+  /// 返回 null = 未配置/求解失败/页面里没有正片直链 (调用方回退嗅探)。
+  static Future<VideoSource?> resolveVideo(String url, {int offset = 0}) async {
+    final viaCurlHtml = await curlFetch(url);
+    if (viaCurlHtml != null) {
+      final viaCurl = extractVideoFromHtml(viaCurlHtml, offset: offset);
+      if (viaCurl != null) return viaCurl;
+      KazumiLogger().i('FlareSolverr: curl 直取未提取到直链 (挑战页?), 落回 FS 求解');
+    }
+    final solution = await solve(url);
+    if (solution == null) return null;
+    return extractVideoFromHtml(solution.html, offset: offset);
   }
 }

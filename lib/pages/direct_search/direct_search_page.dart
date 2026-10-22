@@ -474,25 +474,56 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   final ref = _refFor(card);
                   return InkWell(
                     borderRadius: BorderRadius.circular(8),
-                    onTap: () => _play(card),
+                    // 点卡片: 有 bgm 匹配 → 打开条目详情页 (评分/评论);
+                    // 无匹配 → 直接播放
+                    onTap: () {
+                      final r = _refFor(card);
+                      if (r != null) {
+                        _openBgmSubject(r.subjectId);
+                      } else {
+                        _play(card);
+                      }
+                    },
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(
-                              card.thumb,
-                              width: double.infinity,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => Container(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest,
-                                child: const Center(
-                                    child: Icon(Icons.movie_outlined)),
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.network(
+                                    card.thumb,
+                                    width: double.infinity,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) => Container(
+                                      color: Theme.of(context).colorScheme
+                                          .surfaceContainerHighest,
+                                      child: const Center(
+                                          child: Icon(Icons.movie_outlined)),
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
+                              Positioned(
+                                right: 6,
+                                bottom: 6,
+                                child: IconButton(
+                                  constraints: const BoxConstraints(),
+                                  padding: const EdgeInsets.all(6),
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: Theme.of(context)
+                                        .colorScheme
+                                        .primaryContainer,
+                                  ),
+                                  tooltip: '播放',
+                                  icon: const Icon(Icons.play_arrow_rounded,
+                                      size: 22),
+                                  onPressed: () => _play(card),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(height: 4),

@@ -42,6 +42,12 @@ class NetworkConfig {
   /// 域名), 用于不写入代码的被墙规则源 —— 站名只存在于本地配置。
   static bool _shouldProxyHost(String host) {
     if (_proxyWhitelistHosts.any((h) => host.contains(h))) return true;
+    // [my修改] 源直连浏览站点自动纳入白名单: 这类站直连不可达 (实测 TCP
+    // 握手超时), 站名只存本地配置; 浏览页 dio 通道与同站规则源检索共用此判定。
+    final site = GStorage.getSetting(SettingsKeys.directSearchSite).trim();
+    if (site.isNotEmpty && (Uri.tryParse(site)?.host ?? '') == host) {
+      return true;
+    }
     final extra = GStorage.getSetting(SettingsKeys.proxyWhitelistExtra);
     return extra
         .split(',')

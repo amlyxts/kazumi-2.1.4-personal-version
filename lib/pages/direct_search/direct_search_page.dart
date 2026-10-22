@@ -18,6 +18,7 @@ import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
+import 'package:kazumi/request/core/network_config.dart';
 import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -125,6 +126,13 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   @override
   void initState() {
     super.initState();
+    // 种子: 上次过盾产物 (持久化)。命中则首屏直接走 dio 快速通道,
+    // 不必先等 FlareSolverr 求解; cookies 失效时挑战检测会回退求解。
+    final cachedCookies = GStorage.getSetting(SettingsKeys.flareSolverrCookies);
+    if (cachedCookies.isNotEmpty) {
+      _fsCookies = cachedCookies;
+      _fsUA = GStorage.getSetting(SettingsKeys.flareSolverrUA);
+    }
     final usable = _usableSources();
     if (usable.isNotEmpty) {
       // 恢复会话记忆的源选择 (仍在可用列表中才恢复)
@@ -195,10 +203,16 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   Dio _browseDio() {
     final dio = Dio(BaseOptions(
-      connectTimeout: Duration(seconds: 15),
+      connectTimeout: Duration(seconds: 10),
       receiveTimeout: Duration(seconds: 25),
       validateStatus: (_) => true,
     ));
+    // 白名单代理判定与全局 Dio 同源: 浏览站点直连不可达, 必须走代理,
+    // 否则快速通道每次都耗尽超时再落到 FlareSolverr (页面加载十几秒的根源)。
+    dio.httpClientAdapter = NetworkConfig.fromSettings(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 25),
+    ).createAdapter();
     dio.options.headers = {
       if (_fsUA != null) 'user-agent': _fsUA!,
       if (_fsCookies != null) 'cookie': _fsCookies!,

@@ -82,7 +82,7 @@ class FlareSolverrService {
       }
       final solution = data['solution'];
       if (solution is! Map || solution['response'] == null) return null;
-      return FlareSolverrSolution(
+      final result = FlareSolverrSolution(
         html: solution['response'].toString(),
         cookies: (solution['cookies'] as List? ?? [])
             .whereType<Map>()
@@ -90,6 +90,12 @@ class FlareSolverrService {
             .toList(),
         userAgent: (solution['userAgent'] ?? '').toString(),
       );
+      // 过盾产物落盘: 浏览页 dio 快速通道跨重启复用 (首屏免求解)。
+      // cf_clearance 与 UA/IP 绑定, 恢复时一并带上; 失效由挑战检测兜底。
+      await GStorage.putSetting(
+          SettingsKeys.flareSolverrCookies, result.cookieString);
+      await GStorage.putSetting(SettingsKeys.flareSolverrUA, result.userAgent);
+      return result;
     } catch (e) {
       KazumiLogger().w('FlareSolverr: request error: $e');
       return null;

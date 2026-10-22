@@ -458,6 +458,18 @@ class SettingsKeys {
     '',
     group: SettingGroup.proxy,
   );
+  // [my修改] 过盾产物持久化 (cf_clearance cookies + 绑定 UA): 重启后浏览页
+  // dio 快速通道可即刻复用, 首屏不必等 FlareSolverr 求解; 失效时挑战检测自动回退。
+  static const flareSolverrCookies = SettingKey<String>(
+    'flareSolverrCookies',
+    '',
+    group: SettingGroup.proxy,
+  );
+  static const flareSolverrUA = SettingKey<String>(
+    'flareSolverrUA',
+    '',
+    group: SettingGroup.proxy,
+  );
   // [my修改] 用户自配的追加代理白名单 (逗号分隔域名), 站名不写入代码。
   static const proxyWhitelistExtra = SettingKey<String>(
     'proxyWhitelistExtra',

@@ -214,23 +214,22 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     return _fetchViaFlareSolverr(url);
   }
 
-  /// 解析卡片列表与翻页。锚点直选模式: 引擎不支持谓词内后代轴
-  /// (.//a[...]), 用单元素双简单谓词选取正片锚点 (赞助卡无 watch 锚点,
-  /// 天然排除); 封面取 img 元素属性; 翻页取页码链接最大值。
+  /// 解析卡片列表与翻页。兼容两种卡片结构: 搜索页 (a.video-link +
+  /// div.title + img.main-thumb) 与分区页 (裸锚点 + home-rows-videos-title
+  /// + img cover)。锚点按 href 识别 (两类通吃), 赞助卡无 watch 锚点天然排除。
   _ListPage? _parseCards(String html) {
     try {
       final root = html_parser.parse(html).documentElement!;
       final cards = <_BrowseCard>[];
-      final anchors = root.queryXPath(
-          '//a[contains(@class,"video-link")][contains(@href,"watch?v=")]');
+      final anchors = root.queryXPath('//a[contains(@href,"watch?v=")]');
       for (final node in anchors.nodes) {
         final href = node.attributes['href'] ?? '';
         if (!href.contains('watch?v=')) continue;
         final titleNode =
-            node.queryXPath('.//div[contains(@class,"title")]').node;
+            node.queryXPath('.//div[contains(@class,"title")] | .//div[contains(@class,"videos-title")] | .//h4').node;
         final title = (titleNode?.text ?? '').trim();
         final thumbNode =
-            node.queryXPath('.//img[contains(@class,"main-thumb")]').node;
+            node.queryXPath('.//img').node;
         cards.add(_BrowseCard(
           title: title,
           href: href,

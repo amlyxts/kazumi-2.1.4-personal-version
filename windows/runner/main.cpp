@@ -87,7 +87,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // normal one, which would just activate the existing window.
   const bool qa_mode =
       std::find(command_line_arguments.begin(), command_line_arguments.end(),
-                "--qa-play") != command_line_arguments.end();
+                "--qa-play") != command_line_arguments.end() ||
+      std::find(command_line_arguments.begin(), command_line_arguments.end(),
+                "--qa-local") != command_line_arguments.end();
 
   // Make sure the application is a single instance.
   // This is important for the application to work correctly with the local storage.

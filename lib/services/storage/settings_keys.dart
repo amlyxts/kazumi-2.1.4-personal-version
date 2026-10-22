@@ -445,6 +445,25 @@ class SettingsKeys {
     false,
     group: SettingGroup.proxy,
   );
+  // [my修改] FlareSolverr (本地 CF 挑战求解服务): 地址留空 = 功能关闭。
+  // 代理地址用于让 FlareSolverr 的无头浏览器与应用走同一代理出口,
+  // 否则求解得到的 cf_clearance 因出口 IP 不匹配对本应用无效。
+  static const flareSolverrUrl = SettingKey<String>(
+    'flareSolverrUrl',
+    '',
+    group: SettingGroup.proxy,
+  );
+  static const flareSolverrProxy = SettingKey<String>(
+    'flareSolverrProxy',
+    '',
+    group: SettingGroup.proxy,
+  );
+  // [my修改] 用户自配的追加代理白名单 (逗号分隔域名), 站名不写入代码。
+  static const proxyWhitelistExtra = SettingKey<String>(
+    'proxyWhitelistExtra',
+    '',
+    group: SettingGroup.proxy,
+  );
   static const proxyConfigured = SettingKey<bool>(
     _SettingBoxKey.proxyConfigured,
     false,

@@ -23,6 +23,7 @@ import 'package:kazumi/services/platform/webview_feature_service.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/navigation.dart';
 import 'package:kazumi/utils/qa_driver.dart';
+import 'package:kazumi/utils/qa_local_driver.dart';
 
 // [my修改] 支持命令行参数 (--qa-play 无头画质测试驱动)
 void main(List<String> args) async {
@@ -30,6 +31,11 @@ void main(List<String> args) async {
   // [my修改] 路线②画质测试驱动: --qa-play 无头模式 (规则→搜索→取集→嗅探直链→JSON→退出), 不进主界面
   if (args.contains('--qa-play')) {
     await runQaDriver(args);
+    return;
+  }
+  // [my修改] R1 外挂字幕验证驱动: --qa-local <视频路径> (两阶段实测外挂字幕加载)
+  if (args.contains('--qa-local')) {
+    await runQaLocalDriver(args);
     return;
   }
   registerEchHttpLicenses();

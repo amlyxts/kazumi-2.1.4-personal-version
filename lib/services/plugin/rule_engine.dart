@@ -3,6 +3,7 @@ import 'package:kazumi/modules/search/plugin_search_module.dart';
 import 'package:kazumi/plugins/api_rule_config.dart';
 import 'package:kazumi/request/clients/plugin_site_client.dart';
 import 'package:kazumi/request/core/network_exception.dart';
+import 'package:kazumi/modules/roads/road_module.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/plugin/api_rule_strategy.dart';
 import 'package:kazumi/services/plugin/plugin_cookie_manager.dart';
@@ -92,6 +93,39 @@ class RuleEngine {
       if (_isCancellation(error)) rethrow;
       _logFailure(config, 'search response parsing', error, stackTrace);
       throw SearchErrorException(config.pluginName, cause: error);
+    }
+  }
+
+  /// [my修改] 渲染搜索 URL 而不发请求 (FlareSolverr 分流取页面用)。
+  /// API/POST 模式返回 null (其响应结构与 GET+XPath 不同)。
+  String? buildSearchRequestUrl(RuleExecutionConfig config, String keyword) {
+    try {
+      if (config.searchMode == RuleMode.api || config.usePost) return null;
+      final request = _xpathStrategy.prepareSearchRequest(config, keyword);
+      return request.method == 'GET' ? request.url : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// [my修改] 从已取回的 HTML 解析播放线路 (FlareSolverr 分流用)。
+  /// 语义与 tryParseHarvestedSearch 一致: 不适用/解析不出线路时返回 null。
+  List<Road>? tryParseHarvestedRoads(RuleExecutionConfig config, String raw) {
+    if (raw.trim().isEmpty) return null;
+    if (config.chapterMode == RuleMode.api) return null;
+    try {
+      final parsed = _xpathStrategy.parseChapters(raw, config);
+      if (parsed.roads.isEmpty) return null;
+      _logDiagnostics(config, 'harvested chapters', parsed.diagnostics);
+      return parsed.roads;
+    } catch (error) {
+      if (_logFailures) {
+        KazumiLogger().i(
+          'Plugin: ${config.pluginName} harvested page not parseable as '
+          'chapters, falling back ($error)',
+        );
+      }
+      return null;
     }
   }
 

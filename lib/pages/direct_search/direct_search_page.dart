@@ -251,9 +251,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     });
     var url;
     if (_activeTag != null) {
+      // 标签检索: /search?tags[]=标签
       url = '$_siteBase/search?tags%5B%5D=${Uri.encodeComponent(_activeTag!)}';
     } else if (_genre == '最新') {
-      url = _siteBase;
+      // 全站目录页 (自带 #tags 模态框 → 首次加载即可提取标签表)
+      url = '$_siteBase/search';
     } else {
       url = '$_siteBase/search?genre=${Uri.encodeComponent(_genre)}';
     }

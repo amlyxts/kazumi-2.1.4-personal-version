@@ -109,8 +109,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   String? _fsCookies;
   String? _fsUA;
 
-  // 站点标签表 (从搜索/浏览页的 #tags 模态框提取, 动态更新)
-  List<String> _siteTags = [];
+  // 站点标签分组 (从搜索/浏览页的 #tags 模态框提取, 动态更新)
+  // 结构: {分组名: [标签…]} — 与源站 #tags 模态框的 h5 分组头对齐
+  final Map<String, List<String>> _siteTagGroups = {};
 
   // 会话级记忆 (tab 切换/页面重建后保持选择)
   static Plugin? _rememberedPlugin;
@@ -221,17 +222,32 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
-  /// 从 HTML 提取站点标签表 (#tags 模态框的 tags[] 复选框值)
-  List<String> _parseTags(String html) {
-    try {
-      return RegExp(r'name="tags\[\]"[^>]*value="([^"]+)"')
-          .allMatches(html)
+  /// 从 HTML 提取标签分组 (#tags 模态框: h5 分组头 + tags[] 复选框值)
+  Map<String, List<String>> _parseTagGroups(String html) {
+    final result = <String, List<String>>{};
+    final modalStart = html.indexOf('id="tags"');
+    if (modalStart < 0) return result;
+    final seg = html.substring(modalStart);
+    // 按 <h5 分区分段: 每段 = h5 属性+分组头文本 + </h5> + 该组的复选框
+    for (final part in seg.split('<h5').skip(1)) {
+      final close = part.indexOf('</h5>');
+      if (close < 0) continue;
+      final headSeg = part.substring(0, close);
+      final gt = headSeg.lastIndexOf('>');
+      if (gt < 0) continue;
+      final header = headSeg.substring(gt + 1).trim();
+      if (header.isEmpty) continue;
+      final zone = part.substring(close + 5);
+      final values = RegExp(r'name="tags\[\]"[^>]*value="([^"]+)"')
+          .allMatches(zone)
           .map((m) => m.group(1)!)
           .where((v) => v.isNotEmpty)
           .toList();
-    } catch (_) {
-      return [];
+      if (values.isNotEmpty) {
+        result.putIfAbsent(header, () => []).addAll(values);
+      }
     }
+    return result;
   }
 
   Future<_ListPage?> _fetchViaFlareSolverr(String url) async {
@@ -239,9 +255,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (solution == null) return null;
     _fsCookies = solution.cookieString;
     _fsUA = solution.userAgent;
-    if (_siteTags.isEmpty) {
-      final tags = _parseTags(solution.html);
-      if (tags.isNotEmpty && mounted) setState(() => _siteTags = tags);
+    if (_siteTagGroups.isEmpty) {
+      final groups = _parseTagGroups(solution.html);
+      if (groups.isNotEmpty && mounted) {
+        setState(() => _siteTagGroups..clear()..addAll(groups));
+      }
     }
     return _parseCards(solution.html);
   }
@@ -539,13 +557,14 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   Future<void> _showTagPicker() async {
     final selected = Set<String>.from(_activeTags);
     final filterController = TextEditingController();
-    var visible = List<String>.from(_siteTags)..sort();
+    var visible = _siteTagGroups.values.expand((g) => g).toList()..sort();
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           void applyFilter(String v) {
             setDialogState(() {
-              visible = _siteTags
+              visible = _siteTagGroups.values
+                  .expand((g) => g)
                   .where((t) => v.trim().isEmpty || t.contains(v.trim()))
                   .toList()
                 ..sort();
@@ -694,7 +713,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
             ),
           ),
           // 標籤 chips 行 (标签表提取后显示)
-          if (_siteTags.isNotEmpty)
+          if (_siteTagGroups.isNotEmpty)
             SizedBox(
               height: 48,
               child: ListView(

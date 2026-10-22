@@ -61,23 +61,41 @@ class FlareSolverrService {
     final solution = await solve(url);
     if (solution == null) return null;
     final html = solution.html;
-    final pattern = RegExp(
-        r'https://vdownload\.hembed\.com/[^\s"<>]+?-(\d{3,4})p\.mp4\?secure=[^\s"<>,]+');
+    // 主播放器: <video id="player"> 内的 <source src="...">。CDN 域名会轮换
+    // (实测 vdownload.hembed / cdn.emberglade 等), 按 id 定位而非域名。
+    final playerMatch = RegExp(r'<video[^>]*id="player"[^>]*>(.*?)</video>',
+            dotAll: true)
+        .firstMatch(html);
+    final block = playerMatch?.group(1) ?? '';
+    final srcs = <String>{
+      for (final m in RegExp(r'<source[^>]*src="([^"]+)"')
+          .allMatches(block))
+        m.group(1)!.replaceAll('&amp;', '&'),
+    };
+    // 兜底: 播放器块无 source 标签时, 找全页直链 mp4
+    if (srcs.isEmpty) {
+      srcs.addAll(RegExp(r'https?://[^\s"<>]+\.mp4\?[^"\s<>]+')
+          .allMatches(html)
+          .map((m) => m.group(0)!.replaceAll('&amp;', '&')));
+    }
+    // 质量取最高 (-NNNNp 命名)
     String? best;
-    int bestQuality = -1;
-    for (final m in pattern.allMatches(html)) {
-      final quality = int.tryParse(m.group(1) ?? '') ?? 0;
+    var bestQuality = -1;
+    for (final src in srcs) {
+      final quality = int.tryParse(
+              RegExp(r'-(\d{3,4})p').firstMatch(src)?.group(1) ?? '') ??
+          0;
       if (quality > bestQuality) {
         bestQuality = quality;
-        best = m.group(0);
+        best = src;
       }
     }
     if (best == null) {
       KazumiLogger().w('FlareSolverr: 播放页未解析出正片直链');
       return null;
     }
-    KazumiLogger().i(
-        'FlareSolverr: 正片直链 (${bestQuality}p) ${best.substring(0, best.indexOf('?secure='))}');
+    KazumiLogger().i('FlareSolverr: 正片直链 (${bestQuality}p) '
+        '${best.substring(0, best.indexOf('?secure='))}');
     return VideoSource(
       url: best,
       offset: offset,

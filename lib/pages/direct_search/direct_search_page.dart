@@ -81,15 +81,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   Plugin? _selectedPlugin;
   final TextEditingController _keywordController = TextEditingController();
-
-  /// 浏览/标签/卡片解析是站点结构专用的, 下拉只列出与浏览站点同域的规则源
-  List<Plugin> _usableSources() {
-    final siteHost = Uri.tryParse(_siteBase)?.host ?? '';
-    if (siteHost.isEmpty) return const [];
-    return _pluginsController.pluginList
-        .where((p) => (Uri.tryParse(p.baseUrl)?.host ?? '') == siteHost)
-        .toList();
-  }
   String _genre = '最新'; // '最新' = 全站目录页
   final Set<String> _activeTags = {};
   int _page = 1;
@@ -112,8 +103,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   @override
   void initState() {
     super.initState();
-    final usable = _usableSources();
-    if (usable.isNotEmpty) _selectedPlugin = usable.first;
+    final plugins = _pluginsController.pluginList;
+    if (plugins.isNotEmpty) _selectedPlugin = plugins.first;
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _loadList(reset: true));
   }
@@ -312,7 +303,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       _error = null;
       _bangumiRefs.clear();
     });
-    final url = '$_siteBase/search?query=${Uri.encodeComponent(keyword)}';
+    final url =
+        '$_siteBase/search?query=${Uri.encodeComponent(keyword)}';
     final listPage = await _fetchList(url);
     if (!mounted) return;
     setState(() {
@@ -504,7 +496,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   @override
   Widget build(BuildContext context) {
-    final plugins = _usableSources();
+    final plugins = _pluginsController.pluginList;
     return SettingsDetailScaffold(
       title: const Text('源直连浏览'),
       body: Column(
@@ -529,7 +521,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                       });
                       _loadList(reset: true);
                     },
-                    hint: const Text('无匹配的规则源'),
+                    hint: const Text('选择规则源'),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -550,33 +542,58 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ],
             ),
           ),
+          // 分区 chips 行 (常显)
           SizedBox(
             height: 48,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: ActionChip(
-                    avatar: const Icon(Icons.sell_outlined, size: 16),
-                    label:
-                        const Text('標籤', style: TextStyle(fontSize: 12)),
-                    onPressed: _showTagPicker,
-                  ),
-                ),
-                for (final t in _activeTags)
+                for (final g in ['最新', ..._genres])
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: InputChip(
-                      label: Text(t, style: const TextStyle(fontSize: 12)),
-                      onDeleted: () {
-                        setState(() => _activeTags.remove(t));
+                    child: ChoiceChip(
+                      label: Text(g),
+                      selected: _genre == g,
+                      onSelected: (_) {
+                        setState(() => _genre = g);
                         _loadList(reset: true);
                       },
                     ),
                   ),
               ],
+            ),
+          ),
+          // 標籤 chips 行 (标签表提取后显示)
+          if (_siteTags.isNotEmpty)
+            SizedBox(
+              height: 48,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ActionChip(
+                      avatar: const Icon(Icons.sell_outlined, size: 16),
+                      label:
+                          const Text('標籤', style: TextStyle(fontSize: 12)),
+                      onPressed: _showTagPicker,
+                    ),
+                  ),
+                  for (final t in _activeTags)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: InputChip(
+                        label: Text(t, style: const TextStyle(fontSize: 12)),
+                        onDeleted: () {
+                          setState(() => _activeTags.remove(t));
+                          _loadList(reset: true);
+                        },
+                      ),
+                    ),
+                ],
+              ),
             ),
           if (_bangumiQuerying)
             const Padding(

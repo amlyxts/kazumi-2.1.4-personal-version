@@ -413,6 +413,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   // ====== 收藏切换 (本地收藏 + Bangumi 同步按全局开关走) ======
 
   Future<void> _toggleCollect(_BrowseCard card) async {
+    const collectType = 2; // 看过 (二刷场景)
     final item = _fabricatedItem(card);
     final collected = _collectedIds.contains(item.id);
     if (collected) {
@@ -422,10 +423,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         KazumiDialog.showToast(message: '已取消收藏');
       }
     } else {
-      await _collectController.addCollect(item);
+      await _collectController.addCollect(item, type: collectType);
       _collectedIds.add(item.id);
       if (mounted) {
-        KazumiDialog.showToast(message: '已收藏 (匹配 bgm 条目时自动同步)');
+        KazumiDialog.showToast(
+            message: '已收藏 (分类: 看过'
+                '${_refFor(card) != null ? '; 匹配 bgm 条目自动同步' : ''})');
       }
     }
     if (mounted) setState(() {});

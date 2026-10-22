@@ -40,6 +40,30 @@ abstract class _CollectController with Store {
     return _collectCrudRepository.getCollectType(bangumiItem.id);
   }
 
+  /// [my修改] 仅本地收藏 (跳过 Bangumi 同步): 用于无真实 bangumi id 的
+  /// 直连源条目 (本地哈希 id), 同步对不存在条目无意义。
+  @action
+  Future<void> addCollectLocalOnly(BangumiItem bangumiItem, {type = 1}) async {
+    await _collectCrudRepository.addCollectible(bangumiItem, type);
+    await GStorage.appendCollectChange(
+      bangumiId: bangumiItem.id,
+      action: 1,
+      type: type,
+    );
+    loadCollectibles();
+  }
+
+  @action
+  Future<void> deleteCollectLocalOnly(BangumiItem bangumiItem) async {
+    await _collectCrudRepository.deleteCollectible(bangumiItem.id);
+    await GStorage.appendCollectChange(
+      bangumiId: bangumiItem.id,
+      action: 2,
+      type: 0,
+    );
+    loadCollectibles();
+  }
+
   @action
   Future<void> addCollect(BangumiItem bangumiItem, {type = 1}) async {
     if (type == 0) {

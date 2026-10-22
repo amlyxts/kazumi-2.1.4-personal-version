@@ -112,6 +112,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   // 站点标签表 (从搜索/浏览页的 #tags 模态框提取, 动态更新)
   List<String> _siteTags = [];
 
+  // 会话级记忆 (tab 切换/页面重建后保持选择)
+  static Plugin? _rememberedPlugin;
+  static String _rememberedGenre = '最新';
+  static final Set<String> _rememberedTags = {};
+
   // Bangumi 里番评分匹配 (搜索关键词模式)
   final Map<String, _BangumiRef> _bangumiRefs = {};
   bool _bangumiQuerying = false;
@@ -120,7 +125,15 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   void initState() {
     super.initState();
     final usable = _usableSources();
-    if (usable.isNotEmpty) _selectedPlugin = usable.first;
+    if (usable.isNotEmpty) {
+      // 恢复会话记忆的源选择 (仍在可用列表中才恢复)
+      _selectedPlugin = _rememberedPlugin != null &&
+              usable.contains(_rememberedPlugin)
+          ? _rememberedPlugin
+          : usable.first;
+    }
+    _genre = _rememberedGenre;
+    _activeTags.addAll(_rememberedTags);
     _collectController.loadCollectibles();
     _collectedIds.addAll(
         _collectController.collectibles.map((c) => c.bangumiItem.id));
@@ -463,7 +476,15 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 onPressed: () {
                   final type = selectedType;
                   if (type == null || type <= 0) return;
-                  _collectController.addCollect(item, type: type);
+                  final ref = _refFor(card);
+                  if (ref != null) {
+                    // 匹配 bgm 条目: 走同步路径 (真实条目 id)
+                    _collectController.addCollect(item, type: type);
+                  } else {
+                    // 无匹配: 仅本地收藏 (哈希 id, 同步无意义)
+                    _collectController
+                        .addCollectLocalOnly(item, type: type);
+                  }
                   if (selectedType == 0) {
                     _collectedIds.remove(item.id);
                   } else {
@@ -621,6 +642,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                       setState(() {
                         _selectedPlugin = p;
                         _activeTags.clear();
+                        _rememberedPlugin = p;
+                        _rememberedTags.clear();
                       });
                       _loadList(reset: true);
                     },
@@ -659,7 +682,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                       label: Text(g),
                       selected: _genre == g,
                       onSelected: (_) {
-                        setState(() => _genre = g);
+                        setState(() {
+                          _genre = g;
+                          _rememberedGenre = g;
+                        });
                         _loadList(reset: true);
                       },
                     ),

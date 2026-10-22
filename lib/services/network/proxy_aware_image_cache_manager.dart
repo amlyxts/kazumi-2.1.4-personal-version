@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:http/io_client.dart';
+import 'package:kazumi/request/core/network_config.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/network/bangumi_ech_image_service.dart';
 import 'package:kazumi/services/network/image_acceleration.dart';
@@ -51,12 +52,18 @@ class ProxyAwareImageCacheManager extends CacheManager with ImageCacheManager {
 
   static IOClient _createHttpClient() {
     final client = HttpClient();
-    final proxy = _currentProxy();
-    if (proxy != null) {
-      client.findProxy = (_) => 'PROXY ${proxy.$1}:${proxy.$2}';
+    // [my修改] 白名单制与全局网络策略同源: 仅白名单域 (含源直连浏览站点) 走
+    // 代理, 其余直连 —— 封面在直连可达的视频 CDN 上, 全量走代理会绕远变慢。
+    final config = NetworkConfig.fromSettings();
+    client.findProxy = (uri) {
+      final proxy = config.proxyForUri(uri);
+      if (proxy != null) {
+        return 'PROXY ${proxy.host}:${proxy.port}';
+      }
+      return 'DIRECT';
+    };
+    if (config.allowBadCertificates) {
       client.badCertificateCallback = (cert, host, port) => true;
-    } else if (Platform.isWindows) {
-      client.findProxy = SystemProxyService.findProxy;
     }
     return IOClient(client);
   }

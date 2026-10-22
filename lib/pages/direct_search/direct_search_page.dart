@@ -230,6 +230,13 @@ class _DirectSearchPageState extends State<DirectSearchPage>
           !body.contains('video-item-container')) {
         return null; // 又被挑战了
       }
+      // 快速通道同样播种标签分组 (列表页自带 #tags 模态框), 不再依赖过盾路径
+      if (_siteTagGroups.isEmpty) {
+        final groups = _parseTagGroups(body);
+        if (groups.isNotEmpty && mounted) {
+          setState(() => _siteTagGroups..clear()..addAll(groups));
+        }
+      }
       return _parseCards(body);
     } catch (_) {
       return null;
@@ -279,9 +286,17 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   }
 
   Future<_ListPage?> _fetchList(String url) async {
+    final sw = Stopwatch()..start();
     final viaDio = await _fetchViaDio(url);
-    if (viaDio != null && viaDio.cards.isNotEmpty) return viaDio;
-    return _fetchViaFlareSolverr(url);
+    if (viaDio != null && viaDio.cards.isNotEmpty) {
+      KazumiLogger().i(
+          'DirectSearch: dio fast path ${sw.elapsedMilliseconds}ms, ${viaDio.cards.length} cards');
+      return viaDio;
+    }
+    final viaFs = await _fetchViaFlareSolverr(url);
+    KazumiLogger().i(
+        'DirectSearch: FlareSolverr fallback ${sw.elapsedMilliseconds}ms, cards=${viaFs?.cards.length ?? 0}');
+    return viaFs;
   }
 
   /// 解析卡片列表与翻页。兼容两种卡片结构: 搜索页 (a.video-link +
@@ -308,10 +323,13 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       }
       if (cards.isEmpty) return null;
       int? next;
-      final pageLinks = RegExp(r'[?&]page=(\d+)')
-          .allMatches(html)
-          .map((m) => int.tryParse(m.group(1)!) ?? 0)
-          .toList();
+      // [my修复] 分类页翻页链接写的是 HTML 实体 (&amp;page=N), 字面量正则会
+      // 整页漏配 → next=null → 下一页按钮不显示; 默认页 (?page=2) 不受影响。
+      final pageLinks =
+          RegExp(r'[?&](?:amp;)?page=(\d+)')
+              .allMatches(html)
+              .map((m) => int.tryParse(m.group(1)!) ?? 0)
+              .toList();
       if (pageLinks.isNotEmpty) next = pageLinks.reduce((a, b) => a > b ? a : b);
       final current = RegExp(r'[?&]page=(\d+)').firstMatch(_lastFetchedUrl);
       final cur = current != null ? int.tryParse(current.group(1)!) ?? 1 : 1;
@@ -571,20 +589,20 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   Future<void> _showTagPicker() async {
     final selected = Set<String>.from(_activeTags);
     final filterController = TextEditingController();
-    var visible = _siteTagGroups.values.expand((g) => g).toList()..sort();
+    var filter = '';
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
-          void applyFilter(String v) {
-            setDialogState(() {
-              visible = _siteTagGroups.values
-                  .expand((g) => g)
-                  .where((t) => v.trim().isEmpty || t.contains(v.trim()))
-                  .toList()
-                ..sort();
-            });
-          }
-
+          // 分组渲染: 组名标题 + 组内 chips; 筛选时整组命中才显示组头
+          final groups = _siteTagGroups.entries
+              .map((e) => MapEntry(
+                  e.key,
+                  e.value
+                      .where((t) =>
+                          filter.isEmpty || t.contains(filter))
+                      .toList()))
+              .where((e) => e.value.isNotEmpty)
+              .toList();
           return AlertDialog(
             title: const Text('選擇標籤'),
             content: SizedBox(
@@ -595,25 +613,45 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   TextField(
                     controller: filterController,
                     decoration: const InputDecoration(hintText: '篩選標籤…'),
-                    onChanged: applyFilter,
+                    onChanged: (v) => setDialogState(() => filter = v.trim()),
                   ),
                   const SizedBox(height: 8),
                   Flexible(
                     child: SingleChildScrollView(
-                      child: Wrap(
-                        spacing: 6,
-                        runSpacing: 2,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          for (final t in visible)
-                            FilterChip(
-                              label: Text(t,
-                                  style: const TextStyle(fontSize: 12)),
-                              selected: selected.contains(t),
-                              onSelected: (_) => setDialogState(() =>
-                                  selected.contains(t)
-                                      ? selected.remove(t)
-                                      : selected.add(t)),
+                          for (final group in groups) ...[
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8, bottom: 2),
+                              child: Text(
+                                group.key,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primary,
+                                ),
+                              ),
                             ),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 2,
+                              children: [
+                                for (final t in group.value)
+                                  FilterChip(
+                                    label: Text(t,
+                                        style: const TextStyle(fontSize: 12)),
+                                    selected: selected.contains(t),
+                                    onSelected: (_) => setDialogState(() =>
+                                        selected.contains(t)
+                                            ? selected.remove(t)
+                                            : selected.add(t)),
+                                  ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),

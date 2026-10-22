@@ -53,7 +53,50 @@ class FlareSolverrService {
 
   static bool get isConfigured => _baseUrl != null;
 
-  /// [my修改] 渲染播放页并提取主播放器正片直链 (质量取最高)。
+  /// 求解 (带一次自动重试): CF 的托管挑战间歇性变难导致求解超时是常见
+  /// 瞬时故障, 隔 2 秒重试一次通常即可通过。
+  static Future<FlareSolverrSolution?> solve(String url) async {
+    final first = await _solveOnce(url);
+    if (first != null) return first;
+    await Future.delayed(const Duration(seconds: 2));
+    KazumiLogger().i('FlareSolverr: 首次求解失败, 重试一次');
+    return _solveOnce(url);
+  }
+
+  static Future<FlareSolverrSolution?> _solveOnce(String url) async {
+    final base = _baseUrl;
+    if (base == null) return null;
+    try {
+      final proxyUrl = _proxyUrl;
+      final resp = await _dio.post('$base/v1', data: {
+        'cmd': 'request.get',
+        'url': url,
+        'maxTimeout': 60000,
+        if (proxyUrl != null) 'proxy': {'url': proxyUrl},
+      });
+      final data = resp.data;
+      if (data is! Map || data['status'] != 'ok') {
+        KazumiLogger().w(
+            'FlareSolverr: solve failed: ${data is Map ? data['message'] : 'bad response'}');
+        return null;
+      }
+      final solution = data['solution'];
+      if (solution is! Map || solution['response'] == null) return null;
+      return FlareSolverrSolution(
+        html: solution['response'].toString(),
+        cookies: (solution['cookies'] as List? ?? [])
+            .whereType<Map>()
+            .map((c) => Map<String, dynamic>.from(c))
+            .toList(),
+        userAgent: (solution['userAgent'] ?? '').toString(),
+      );
+    } catch (e) {
+      KazumiLogger().w('FlareSolverr: request error: $e');
+      return null;
+    }
+  }
+
+  /// 渲染播放页并提取主播放器正片直链 (质量取最高)。
   /// 该站页面为服务端渲染, 正片 mp4 直链写在 HTML 里; 页面上混有广告视频
   /// (动态注入), 嗅探会误抓 —— 直取直链从机制上规避广告。
   /// 返回 null = 未配置/求解失败/页面里没有正片直链 (调用方回退嗅探)。
@@ -101,41 +144,5 @@ class FlareSolverrService {
       offset: offset,
       type: VideoSourceType.online,
     );
-  }
-
-  /// 交给 FlareSolverr 渲染目标页; 失败/未配置返回 null, 由调用方回退。
-  static Future<FlareSolverrSolution?> solve(String url) async {
-    final base = _baseUrl;
-    if (base == null) return null;
-    try {
-      final proxyUrl = _proxyUrl;
-      final resp = await _dio.post('$base/v1', data: {
-        'cmd': 'request.get',
-        'url': url,
-        'maxTimeout': 60000,
-        if (proxyUrl != null) 'proxy': {'url': proxyUrl},
-      });
-      final data = resp.data;
-      if (data is! Map || data['status'] != 'ok') {
-        KazumiLogger().w(
-            'FlareSolverr: solve failed: ${data is Map ? data['message'] : 'bad response'}');
-        return null;
-      }
-      final solution = data['solution'];
-      if (solution is! Map || solution['response'] == null) {
-        return null;
-      }
-      return FlareSolverrSolution(
-        html: solution['response'].toString(),
-        cookies: (solution['cookies'] as List? ?? [])
-            .whereType<Map>()
-            .map((c) => Map<String, dynamic>.from(c))
-            .toList(),
-        userAgent: (solution['userAgent'] ?? '').toString(),
-      );
-    } catch (e) {
-      KazumiLogger().w('FlareSolverr: request error: $e');
-      return null;
-    }
   }
 }

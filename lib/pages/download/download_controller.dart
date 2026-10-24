@@ -13,7 +13,7 @@ import 'package:kazumi/utils/format.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/video_source/services.dart';
-import 'package:kazumi/request/apis/danmaku_api.dart';
+import 'package:kazumi/services/danmaku/danmaku_alignment_service.dart';
 import 'package:mobx/mobx.dart';
 
 part 'download_controller.g.dart';
@@ -725,21 +725,28 @@ abstract class _DownloadController with Store {
         KazumiLogger().i(
             'DownloadController: fetching danmaku for episode $episodeNumber (async)');
 
-        // 获取 DanDan 番剧 ID
-        final danDanBangumiID =
-            await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bangumiId);
-        if (danDanBangumiID == 0) {
+        // [my修改] 走对齐解析链 (锚点→推断→自动+正片校验, 与播放同一
+        // 事实源): 错位源 (连排两季等) 下载的弹幕不再静默错配缓存。
+        final record = _repository.getRecord(recordKey);
+        final (danmakus, match) =
+            await DanmakuAlignmentService.instance.resolve(
+          bgmId: bangumiId,
+          plugin: record?.pluginName ?? '',
+          srcEp: episodeNumber,
+          itemTitle: record?.bangumiName,
+        );
+        final danDanBangumiID = match.episodeId != null
+            ? DanmakuAlignmentService.decomposeEpisodeId(match.episodeId!).$1
+            : 0;
+        if (match.source == 'suspect') {
           KazumiLogger().w(
-              'DownloadController: failed to get DanDan bangumiID for $bangumiId');
+              'DownloadController: danmaku suspect mismatch ep$episodeNumber: '
+              '${match.note} — 跳过缓存, 播放时可手动匹配');
           return;
         }
-
-        // 获取弹幕列表
-        final danmakus =
-            await DanmakuApi.getDanDanmaku(danDanBangumiID, episodeNumber);
         if (danmakus.isEmpty) {
           KazumiLogger().i(
-              'DownloadController: no danmaku found for episode $episodeNumber');
+              'DownloadController: no danmaku found for episode $episodeNumber (${match.source})');
           return;
         }
 

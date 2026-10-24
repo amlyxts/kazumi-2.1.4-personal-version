@@ -12,6 +12,7 @@ import 'dart:math' as math;
 
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/modules/danmaku/danmaku_episode_response.dart';
+import 'package:kazumi/modules/danmaku/danmaku_module.dart';
 import 'package:kazumi/modules/danmaku/danmaku_search_response.dart';
 import 'package:kazumi/request/apis/danmaku_api.dart';
 import 'package:kazumi/services/logging/logger.dart';
@@ -327,6 +328,99 @@ class DanmakuAlignmentService {
         return c != 0 ? c : x.$3.compareTo(y.$3);
       });
     return [for (final e in indexed) e.$1];
+  }
+
+  // ====== 公共解析入口 (播放/下载缓存弹幕共用) ======
+
+  /// 解析链: 锚点 → 推断 → 自动(bgm映射+正片校验, 通过则顺手转锚点)。
+  /// 返回 (弹幕列表, 匹配信息); 同时更新 lastMatch。
+  /// 无映射/疑似错配时弹幕列表为空但信息可判 (下载侧据此跳过缓存)。
+  Future<(List<DanmakuEntry>, DanmakuMatchInfo)> resolve({
+    required int bgmId,
+    required String plugin,
+    required int srcEp,
+    String? itemTitle,
+  }) async {
+    DanmakuMatchInfo info(String source,
+            {int? episodeId, String? episodeTitle, String? note}) =>
+        DanmakuMatchInfo(
+          source: source,
+          bgmId: bgmId,
+          pluginName: plugin,
+          srcEp: srcEp,
+          episodeId: episodeId,
+          episodeTitle: episodeTitle,
+          note: note,
+        );
+
+    Future<List<DanmakuEntry>?> fetchByEpisodeId(int episodeId) async {
+      try {
+        return await DanmakuApi.getDanDanmakuByEpisodeID(episodeId);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    // 1) 锚点
+    final anchor = anchorFor(bgmId, plugin, srcEp);
+    if (anchor != null) {
+      final res = await fetchByEpisodeId(anchor.episodeId);
+      if (res != null) {
+        lastMatch = info('anchor',
+            episodeId: anchor.episodeId, episodeTitle: anchor.title);
+        return (res, lastMatch!);
+      }
+    }
+
+    // 2) 推断
+    try {
+      final inferred = await infer(
+          bgmId: bgmId, plugin: plugin, srcEp: srcEp, itemTitle: itemTitle);
+      if (inferred != null) {
+        final res = await fetchByEpisodeId(inferred.episodeId);
+        if (res != null) {
+          lastMatch = info('inferred',
+              episodeId: inferred.episodeId,
+              episodeTitle: inferred.episodeTitle);
+          return (res, lastMatch!);
+        }
+      }
+    } catch (e) {
+      KazumiLogger().w('DanmakuAlignment: inference failed', error: e);
+    }
+
+    // 3) 自动: bgm 映射 + 正片校验
+    try {
+      final dandanId =
+          await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bgmId);
+      if (dandanId == 0) {
+        // 无映射 (含直连浏览哈希条目): 快速结束, 不做注定失败的标题搜索
+        lastMatch = info('none');
+        return (const <DanmakuEntry>[], lastMatch!);
+      }
+      final suspect = await validateAutoTarget(dandanId, srcEp);
+      if (suspect != null) {
+        KazumiLogger().w('DanmakuAlignment: suspect mismatch: $suspect');
+        lastMatch = info('suspect', note: suspect);
+        return (const <DanmakuEntry>[], lastMatch!);
+      }
+      final res = await DanmakuApi.getDanDanmaku(dandanId, srcEp);
+      if (res.isNotEmpty) {
+        final eps = await episodesOf(dandanId);
+        final title = srcEp <= eps.length ? eps[srcEp - 1].episodeTitle : '';
+        await writeAnchor(
+            bgmId, plugin, srcEp, dandanId * 10000 + srcEp, title);
+        lastMatch = info('auto', episodeTitle: title);
+      } else {
+        lastMatch = info('none');
+      }
+      return (res, lastMatch!);
+    } catch (e) {
+      KazumiLogger()
+          .w('DanmakuAlignment: auto resolve failed', error: e);
+      lastMatch = info('none', note: '解析失败');
+      return (const <DanmakuEntry>[], lastMatch!);
+    }
   }
 
   // ====== 自动命中校验 (治"成功但错配") ======

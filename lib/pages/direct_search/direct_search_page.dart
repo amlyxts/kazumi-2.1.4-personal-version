@@ -987,6 +987,20 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (mounted) setState(() {});
   }
 
+  /// 封面反查: 用卡片封面 URL 打开 SauceNAO (服务端抓图, 对动画/同人
+  /// 封面命中率高, 结果含 DLsite 作品链接)。SauceNAO 拦脚本但放行真
+  /// 浏览器, 故只做外链跳转; 找到作品后复制作品号回贴绑定。
+  Future<void> _openCoverReverseSearch(String thumbUrl) async {
+    final url = 'https://saucenao.com/search.php?url='
+        '${Uri.encodeComponent(thumbUrl)}';
+    try {
+      await launchUrl(Uri.parse(url),
+          mode: LaunchMode.externalApplication);
+    } catch (_) {
+      KazumiDialog.showToast(message: '无法打开浏览器');
+    }
+  }
+
   /// 浏览器打开 DLsite 检索 (人眼看封面定位作品, 简中界面)。
   /// [my修复] fsr 路径参数须以 / 闭合后再接 ?locale 查询串 (直接拼接
   /// 返回 200 但 0 结果的残页)。中文标题在 DLsite 恒 0 结果 (语言断层,
@@ -1194,6 +1208,14 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ),
             ),
             actions: [
+              // 封面反查: hanime 封面多为 DLsite 原封面, SauceNAO 服务端
+              // 抓图比对后给出作品链接 (脚本访问被 403, 浏览器正常);
+              // 找到后复制作品号回贴绑定。
+              if (card.thumb.isNotEmpty)
+                TextButton(
+                  onPressed: () => _openCoverReverseSearch(card.thumb),
+                  child: const Text('封面反查'),
+                ),
               TextButton(
                 onPressed: () => _openDlsiteBrowserSearch(controller.text),
                 child: const Text('浏览器搜索'),

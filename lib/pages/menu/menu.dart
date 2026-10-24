@@ -70,6 +70,7 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
     final outlet = _outletKey.currentState;
     if (outlet == null) return;
     outlet.navigate('/tab${menu.getPath(index)}/');
+    shellHighlightOverride.value = null; // 回归自动推算
     setState(() => _selectedIndex = index);
   }
 
@@ -108,11 +109,17 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             _handleSystemBack(context);
           }
         },
-        child: OrientationBuilder(
-          builder: (context, orientation) {
-            return orientation == Orientation.portrait
-                ? _bottomMenu(context, _selectedIndex)
-                : _sideMenu(context, _selectedIndex);
+        child: ValueListenableBuilder<int?>(
+          valueListenable: shellHighlightOverride,
+          builder: (context, override, _) {
+            final highlight = override ?? _selectedIndex;
+            return OrientationBuilder(
+              builder: (context, orientation) {
+                return orientation == Orientation.portrait
+                    ? _bottomMenu(context, highlight)
+                    : _sideMenu(context, highlight);
+              },
+            );
           },
         ),
       ),
@@ -222,9 +229,10 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                       heroTag: null,
                       onPressed: () {
                         _lastExitPromptAt = null;
-                        // [my修复] 按路径直航: 源搜索不在侧栏 destinations
-                        // 里, 页签索引表与按钮无对应关系 (indexForPath 会
-                        // 错位到里番收藏/推荐)
+                        // [my修复] 按路径直航 + 显式熄灭页签高亮 (源搜索
+                        // 不在 destinations, 自动推算会把 location 映射回
+                        // 其他页签)
+                        shellHighlightOverride.value = -1;
                         _outletKey.currentState
                             ?.navigate('/tab/direct_search/');
                       },

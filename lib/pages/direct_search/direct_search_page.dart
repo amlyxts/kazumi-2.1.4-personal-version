@@ -456,8 +456,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   // 命中即免网络秒开; 后台取新版本静默替换 (stale-while-revalidate)。
   // 网络 RTT 实测 ~1.5s (解析仅 ~75ms), 首访省不掉, 命中可全免。
 
-  final Map<String, _ListPage> _pageCache = {};
-  final Set<String> _prefetchInflight = {};
+  // [my修复] 页缓存/预取去重升级为静态: 页签改按钮导航后切走即销毁重建,
+  // 实例字段随 dispose 丢失 → 切回必然重新取数 (2-3s)。静态字段与
+  // _remembered* 同寿命 (进程内存活), 切回命中缓存秒开 (SWR 机制不变)。
+  static final Map<String, _ListPage> _pageCache = {};
+  static final Set<String> _prefetchInflight = {};
 
   void _cachePut(String url, _ListPage page) {
     _pageCache

@@ -158,6 +158,12 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             icon: Icon(Icons.favorite_outlined),
             label: '追番',
           ),
+          // [my修改] 里番收藏页签 (追番下方)
+          const NavigationDestination(
+            selectedIcon: Icon(Icons.folder_special),
+            icon: Icon(Icons.folder_special_outlined),
+            label: '里番收藏',
+          ),
           // [my修改] 本地视频页签仅桌面端
           if (kSupportsLocalVideo)
             NavigationDestination(
@@ -219,6 +225,12 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                   selectedIcon: Icon(Icons.favorite),
                   icon: Icon(Icons.favorite_border),
                   label: Text('追番'),
+                ),
+                // [my修改] 里番收藏页签 (追番下方)
+                const NavigationRailDestination(
+                  selectedIcon: Icon(Icons.folder_special),
+                  icon: Icon(Icons.folder_special_outlined),
+                  label: Text('里番收藏'),
                 ),
                 // [my修改] 本地视频页签仅桌面端
                 if (kSupportsLocalVideo)

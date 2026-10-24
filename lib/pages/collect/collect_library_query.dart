@@ -22,6 +22,8 @@ class CollectLibraryQuery {
     final terms = query.trim().toLowerCase().split(RegExp(r'\s+'));
     return items.where((entry) {
       if (!CollectType.fromValue(entry.type).isCollected) return false;
+      // [my修改] 里番区条目不在追番 (表番) 视图显示, 见里番收藏页
+      if (entry.section == 1) return false;
       final item = entry.bangumiItem;
       final names =
           [item.nameCn, item.name, ...item.alias].join('\n').toLowerCase();

@@ -28,6 +28,8 @@ final MenuRoute menu = MenuRoute([
   MenuRouteItem(path: '/popular'),
   MenuRouteItem(path: '/timeline'),
   MenuRouteItem(path: '/collect'),
+  // [my修改] 里番收藏页签 (追番下方)
+  MenuRouteItem(path: '/adult_collect'),
   // [my修改] 本地视频页签 (仅桌面端)
   if (kSupportsLocalVideo) MenuRouteItem(path: '/local_video'),
   // [my修改] 源直连搜索页签

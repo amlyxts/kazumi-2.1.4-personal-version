@@ -876,7 +876,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                     leading: const Icon(Icons.inventory_2, size: 20),
                     title: const Text('手动认领条目…',
                         style: TextStyle(fontSize: 13)),
-                    subtitle: const Text('自动匹配未命中, 手动绑定 Bangumi 条目',
+                    subtitle: const Text('匹配 Bangumi 条目获取评分 (仅信息, 不同步)',
                         style: TextStyle(fontSize: 11)),
                     onTap: () => _showClaimSearch(card),
                   ),
@@ -893,25 +893,19 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 onPressed: () {
                   final type = selectedType;
                   if (type == null) return;
-                  final ref = _refFor(card);
                   // 弹窗打开期间可能刚完成认领, 条目 id 会从哈希变真实条目,
-                  // 现取现用避免拿旧 id 走同步。
+                  // 现取现用避免旧 id 进本地库
                   final item = _fabricatedItem(card);
                   // [my修复] type==0 (取消收藏) 此前被提前 return 拦死,
                   // 从未生效; 现按有无 bgm 匹配走对应删除路径。
+                  // [my修改] 本页收藏一律入里番区 (section=1): 纯本地 +
+                  // WebDAV, 永不同步 Bangumi (整站成人内容, 表番账号保持
+                  // 干净); 认领仅用于评分/信息增强, 不触发同步
                   if (type == 0) {
-                    if (ref != null) {
-                      _collectController.deleteCollect(item);
-                    } else {
-                      _collectController.deleteCollectLocalOnly(item);
-                    }
-                  } else if (ref != null) {
-                    // 匹配 bgm 条目: 走同步路径 (真实条目 id)
-                    _collectController.addCollect(item, type: type);
+                    _collectController.deleteCollectLocalOnly(item);
                   } else {
-                    // 无匹配: 仅本地收藏 (哈希 id, 同步无意义)
-                    _collectController
-                        .addCollectLocalOnly(item, type: type);
+                    _collectController.addCollectLocalOnly(item,
+                        type: type, section: 1);
                   }
                   // [my修复] setState 刷新星标 + toast 反馈
                   final label = CollectType.fromValue(type).label;

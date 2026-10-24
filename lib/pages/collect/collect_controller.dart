@@ -43,13 +43,22 @@ abstract class _CollectController with Store {
   /// [my修改] 仅本地收藏 (跳过 Bangumi 同步): 用于无真实 bangumi id 的
   /// 直连源条目 (本地哈希 id), 同步对不存在条目无意义。
   @action
-  Future<void> addCollectLocalOnly(BangumiItem bangumiItem, {type = 1}) async {
-    await _collectCrudRepository.addCollectible(bangumiItem, type);
+  Future<void> addCollectLocalOnly(BangumiItem bangumiItem,
+      {type = 1, int section = 0}) async {
+    await _collectCrudRepository.addCollectible(bangumiItem, type,
+        section: section);
     await GStorage.appendCollectChange(
       bangumiId: bangumiItem.id,
       action: 1,
       type: type,
     );
+    loadCollectibles();
+  }
+
+  /// [my新增] 迁移收藏分区 (0=表番 ⇄ 1=里番), 保留原类型与时间
+  @action
+  Future<void> setCollectSection(int id, int section) async {
+    await _collectCrudRepository.setCollectSection(id, section);
     loadCollectibles();
   }
 

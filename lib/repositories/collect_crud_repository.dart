@@ -30,7 +30,12 @@ abstract class ICollectCrudRepository {
   ///
   /// [bangumiItem] 番剧信息
   /// [type] 收藏类型
-  Future<void> addCollectible(BangumiItem bangumiItem, int type);
+  /// [section] 收藏分区 (0=表番 可同步 bgm / 1=里番 纯本地)
+  Future<void> addCollectible(BangumiItem bangumiItem, int type,
+      {int section = 0});
+
+  /// [my新增] 迁移收藏分区 (表番⇄里番), 保留原类型与时间
+  Future<void> setCollectSection(int id, int section);
 
   /// 更新收藏的番剧信息
   ///
@@ -105,17 +110,36 @@ class CollectCrudRepository implements ICollectCrudRepository {
   }
 
   @override
-  Future<void> addCollectible(BangumiItem bangumiItem, int type) async {
+  Future<void> addCollectible(BangumiItem bangumiItem, int type,
+      {int section = 0}) async {
     try {
       final collectedBangumi = CollectedBangumi(
         bangumiItem,
         DateTime.now(),
         type,
+        section: section,
       );
       await GStorage.putCollectible(collectedBangumi);
     } catch (e, stackTrace) {
       KazumiLogger().e(
         'GStorage: add collectible failed. id=${bangumiItem.id}, type=$type',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> setCollectSection(int id, int section) async {
+    try {
+      final collectible = _collectiblesBox.get(id);
+      if (collectible == null) return;
+      collectible.section = section;
+      await GStorage.putCollectible(collectible);
+    } catch (e, stackTrace) {
+      KazumiLogger().e(
+        'GStorage: set collect section failed. id=$id',
         error: e,
         stackTrace: stackTrace,
       );

@@ -1246,6 +1246,10 @@ class _PlayerItemState extends State<PlayerItem>
       initialKeyword: videoPageController.title,
       danmakuController: playerController.danmaku,
       onBeforeApply: videoPageController.cancelAutomaticDanmakuLoad,
+      // [my新增] 传当前源集数与插件名, 手动匹配成功即写锚点
+      srcEp: videoPageController
+          .commentEpisodeForSelection(videoPageController.playbackEpisode),
+      pluginName: videoPageController.currentPlugin.name,
     ));
   }
 

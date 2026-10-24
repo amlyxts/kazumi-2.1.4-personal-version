@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:webdav_client/webdav_client.dart' as webdav;
 import 'package:path_provider/path_provider.dart';
@@ -90,6 +91,83 @@ class WebDav {
   bool get isDanmakuShieldSyncEnabled =>
       GStorage.getSetting(SettingsKeys.webDavEnable) &&
       GStorage.getSetting(SettingsKeys.webDavEnableDanmakuShield);
+
+  static const String _danmakuAlignmentPath =
+      '$_syncRootPath/danmakuAlignment';
+
+  bool get isDanmakuAlignmentSyncEnabled =>
+      GStorage.getSetting(SettingsKeys.webDavEnable) &&
+      GStorage.getSetting(SettingsKeys.webDavEnableDanmakuAlignment);
+
+  /// [my新增] 弹幕对齐表同步 (仿弹幕屏蔽词: per-device JSON, 合并回调
+  /// 在服务层做时间戳新旧取舍)。
+  Future<void> syncDanmakuAlignment({
+    required String deviceId,
+    required Future<Map<String, dynamic>> Function(Map<String, dynamic>)
+        merge,
+    required Map<String, dynamic> Function() export,
+  }) {
+    return _runWebDavExclusive(() async {
+      if (!isDanmakuAlignmentSyncEnabled) return;
+      if (!initialized) await _init();
+      await _ensureLocalTempDirectory();
+      await _ensureRemoteDirectory(_danmakuAlignmentPath);
+      final runDirectory =
+          await webDavLocalTempDirectory.createTemp('danmaku-align-sync-');
+      try {
+        var remote = <String, dynamic>{};
+        final entries = await client.readDir(_danmakuAlignmentPath);
+        for (final entry in entries) {
+          final name = entry.name ?? '';
+          if (entry.isDir == true || !name.endsWith('.json')) continue;
+          final file = File('${runDirectory.path}/$name');
+          await client.read2File('$_danmakuAlignmentPath/$name', file.path);
+          final decoded = jsonDecodeOrNull(await file.readAsString());
+          if (decoded is Map<String, dynamic>) {
+            remote = _mergeFlatAlignment(remote, decoded);
+          }
+        }
+        if (!isDanmakuAlignmentSyncEnabled) return;
+        final merged = await merge(remote);
+        final upload = File('${runDirectory.path}/local.json');
+        await upload.writeAsString(jsonEncode(merged), flush: true);
+        final destination = '$_danmakuAlignmentPath/$deviceId.json';
+        await _publishRemoteFile(
+          sourceFilePath: upload.path,
+          destinationPath: destination,
+          temporaryPath: '$destination.cache',
+        );
+      } finally {
+        await runDirectory.delete(recursive: true);
+      }
+    });
+  }
+
+  /// 扁平对齐 JSON 的并集合并 (深一层 srcEp 并集, 值保留远端原样 —
+  /// 新旧裁决交给服务层 merge 回调)
+  Map<String, dynamic> _mergeFlatAlignment(
+      Map<String, dynamic> a, Map<String, dynamic> b) {
+    final out = Map<String, dynamic>.of(a);
+    for (final e in b.entries) {
+      if (e.value is Map) {
+        final existing = out[e.key];
+        if (existing is Map) {
+          out[e.key] = {...existing, ...e.value as Map};
+        } else {
+          out[e.key] = e.value;
+        }
+      }
+    }
+    return out;
+  }
+
+  dynamic jsonDecodeOrNull(String raw) {
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<void> syncDanmakuShield({
     required String deviceId,

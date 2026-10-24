@@ -4,6 +4,7 @@ import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
 import 'package:kazumi/bean/settings/settings_list.dart';
 import 'package:kazumi/pages/settings/danmaku/danmaku_ch_convert_tile.dart';
+import 'package:kazumi/services/danmaku/danmaku_alignment_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 class DanmakuSettingsPage extends StatefulWidget {
@@ -22,6 +23,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
   late double defaultDanmakuLineHeight;
   late double defaultdanmakuBorderSize;
   late bool danmakuBorder;
+  late bool alignmentSync;
   late bool danmakuTop;
   late bool danmakuBottom;
   late bool danmakuScroll;
@@ -44,6 +46,8 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
       compactLayout: MediaQuery.sizeOf(context).shortestSide < 600,
     );
     defaultDanmakuArea = GStorage.getSetting(SettingsKeys.danmakuArea);
+    alignmentSync =
+        GStorage.getSetting(SettingsKeys.webDavEnableDanmakuAlignment);
     defaultDanmakuOpacity = GStorage.getSetting(SettingsKeys.danmakuOpacity);
     defaultDanmakuFontSize = GStorage.getSetting<double>(
         SettingsKeys.danmakuFontSize,
@@ -202,6 +206,38 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
                   context.pushNamed('/settings/danmaku/shield');
                 },
                 title: Text('关键词屏蔽'),
+              ),
+            ],
+          ),
+          // [my新增] 弹幕集数对齐: 锚点/推断机制的管理与跨设备同步
+          SettingsSection(
+            title: const Text('集数对齐'),
+            tiles: [
+              SettingsTile(
+                leading: Icons.align_horizontal_left_rounded,
+                title: const Text('对齐记录'),
+                description: Text(
+                    '锚点 ${DanmakuAlignmentService.instance.totalAnchors} 条 — 手动匹配/校验通过的自动匹配会记住源集与弹幕集的对应, 邻集自动推断'),
+                trailing: TextButton(
+                  onPressed: () async {
+                    await DanmakuAlignmentService.instance.clearAll();
+                    if (context.mounted) setState(() {});
+                  },
+                  child: const Text('清除'),
+                ),
+              ),
+              SettingsTile.switchTile(
+                leading: Icons.cloud_sync_rounded,
+                onToggle: (value) async {
+                  alignmentSync = value ?? !alignmentSync;
+                  await GStorage.putSetting<bool>(
+                      SettingsKeys.webDavEnableDanmakuAlignment,
+                      alignmentSync);
+                  setState(() {});
+                },
+                title: const Text('WebDAV 同步对齐记录'),
+                description: const Text('依赖 WebDAV 总开关; 弹幕屏蔽词式的按设备合并'),
+                initialValue: alignmentSync,
               ),
             ],
           ),

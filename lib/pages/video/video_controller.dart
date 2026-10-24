@@ -6,6 +6,7 @@ import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
+import 'package:kazumi/services/danmaku/danmaku_alignment_service.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/download/download_module.dart';
 import 'package:kazumi/modules/history/history_module.dart';
@@ -640,6 +641,7 @@ abstract class _VideoPageController with Store implements Disposable {
         params.bangumiId,
         params.pluginName,
         params.danmakuEpisodeNumber,
+        itemTitle: params.bangumiName,
       );
       if (session.isActive && danmakuSession.isActive) {
         if (result.hasDanmakus) {
@@ -651,7 +653,13 @@ abstract class _VideoPageController with Store implements Disposable {
           );
         } else {
           playerController.danmaku.applyUnavailableDanmakuLoad(result);
-          if (result.isFailed) {
+          // [my新增] 疑似错配提示 (自动命中 OP/ED 或越界, 不再静默空弹幕)
+          final lastMatch =
+              DanmakuAlignmentService.instance.lastMatch;
+          if (lastMatch != null && lastMatch.source == 'suspect') {
+            KazumiDialog.showToast(
+                message: '弹幕疑似错配 (${lastMatch.note}), 可手动匹配');
+          } else if (result.isFailed) {
             KazumiDialog.showToast(message: '弹幕加载失败，可手动检索');
           }
         }

@@ -9,6 +9,8 @@ import 'package:kazumi/bean/widget/content_section.dart';
 import 'package:kazumi/pages/settings/danmaku/danmaku_ch_convert_tile.dart';
 import 'package:kazumi/pages/settings/danmaku/danmaku_shield_settings_sheet.dart';
 import 'package:kazumi/pages/settings/danmaku/danmaku_time_offset_sheet.dart';
+import 'package:kazumi/bean/dialog/dialog_helper.dart';
+import 'package:kazumi/services/danmaku/danmaku_alignment_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 enum _DanmakuSettingsDestination {
@@ -70,6 +72,68 @@ class _DanmakuSettingsSheetState extends State<_DanmakuSettingsSheet> {
     _duration = GStorage.getSetting(SettingsKeys.danmakuDuration);
   }
 
+  Widget _buildMatchStatusTile(BuildContext context) {
+    final match = DanmakuAlignmentService.instance.lastMatch;
+    if (match == null) {
+      return const ListTile(
+        dense: true,
+        title: Text('当前集：未加载弹幕', style: TextStyle(fontSize: 13)),
+        subtitle: Text('开始播放后此处显示匹配来源', style: TextStyle(fontSize: 11)),
+      );
+    }
+    final isSuspect = match.source == 'suspect';
+    final isInferred = match.source == 'inferred';
+    return ListTile(
+      dense: true,
+      leading: Icon(
+        isSuspect
+            ? Icons.warning_amber_rounded
+            : isInferred
+                ? Icons.auto_awesome_rounded
+                : Icons.verified_rounded,
+        size: 20,
+        color: isSuspect
+            ? Theme.of(context).colorScheme.error
+            : Theme.of(context).colorScheme.primary,
+      ),
+      title: Text(
+        '当前集：${match.sourceLabel}'
+        '${match.episodeTitle != null && match.episodeTitle!.isNotEmpty ? ' · ${match.episodeTitle}' : ''}',
+        style: const TextStyle(fontSize: 13),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(
+        isSuspect
+            ? (match.note ?? '自动命中非正片条目, 建议用「弹幕切换」手动匹配')
+            : isInferred
+                ? '由锚点推断 — 如有误请手动匹配一次即纠正'
+                : '第 ${match.srcEp} 集 · ${match.pluginName}',
+        style: const TextStyle(fontSize: 11),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: isInferred && match.episodeId != null
+          ? TextButton(
+              onPressed: () async {
+                await DanmakuAlignmentService.instance.writeAnchor(
+                  match.bgmId,
+                  match.pluginName,
+                  match.srcEp,
+                  match.episodeId!,
+                  match.episodeTitle ?? '',
+                );
+                if (context.mounted) {
+                  setState(() {});
+                  KazumiDialog.showToast(message: '已确认, 本集起为锚点匹配');
+                }
+              },
+              child: const Text('确认'),
+            )
+          : null,
+    );
+  }
+
   void _applyOption(DanmakuOption option) {
     setState(() => widget.danmakuController.updateOption(option));
   }
@@ -92,6 +156,11 @@ class _DanmakuSettingsSheetState extends State<_DanmakuSettingsSheet> {
               key: const PageStorageKey('danmaku-appearance'),
               padding: materialBottomSheetContentPadding,
               children: [
+                // [my新增] 当前集弹幕匹配状态: 锚点/推断可确认转正,
+                // 疑似错配提示手动处理 (机制见 DanmakuAlignmentService)
+                ContentSection.group(title: '弹幕匹配', children: [
+                  _buildMatchStatusTile(context),
+                ]),
                 ContentSection.group(title: '显示效果', children: [
                   SettingsSliderTile(
                     title: Text('字体大小'),

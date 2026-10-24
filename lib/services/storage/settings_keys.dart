@@ -576,6 +576,22 @@ class SettingsKeys {
     4,
     group: SettingGroup.download,
   );
+  // [my新增] 弹幕集数对齐: 锚点表 (源集→episodeId), WebDAV 同步开关与设备id
+  static const danmakuAlignmentMap = SettingKey<String>(
+    'danmakuAlignmentMap',
+    '',
+    group: SettingGroup.danmaku,
+  );
+  static const webDavEnableDanmakuAlignment = SettingKey<bool>(
+    'webDavEnableDanmakuAlignment',
+    false,
+    group: SettingGroup.sync,
+  );
+  static const danmakuAlignmentDeviceId = SettingKey<String>(
+    'danmakuAlignmentDeviceId',
+    '',
+    group: SettingGroup.sync,
+  );
   static const downloadDanmaku = SettingKey<bool>(
     _SettingBoxKey.downloadDanmaku,
     true,
@@ -748,6 +764,9 @@ class SettingsKeys {
     downloadParallelEpisodes,
     downloadParallelSegments,
     downloadDirectConnections,
+    danmakuAlignmentMap,
+    webDavEnableDanmakuAlignment,
+    danmakuAlignmentDeviceId,
     downloadDanmaku,
     downloadDirectory,
     downloadDirectoryBookmark,

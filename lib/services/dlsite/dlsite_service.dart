@@ -104,12 +104,14 @@ class DlsiteService {
     }
   }
 
-  /// 关键词检索 (同人分类, 每页 30)。标题在 work_name 锚点 title 属性,
-  /// 社团在 maker_name 锚点文本 —— 均为实测结构。
+  /// 关键词检索 (每页 30, 不限分类 — 商业作品不在同人分类内, 过滤会漏)。
+  /// 标题在 work_name 锚点 title 属性, 社团在 maker_name 锚点文本。
+  /// 注意 DLsite 为日文站, 中文标题恒 0 结果 (实测), 调用方应优先用
+  /// bgm 条目日文名等日文关键词。
   static Future<List<DlsiteWork>> search(String keyword) async {
     final enc = Uri.encodeComponent(keyword);
     final html = await _curlGet(
-        'https://www.dlsite.com/maniax/fsr/=/keyword/$enc/work_type_category%5B0%5D/doujin/per_page/30/');
+        'https://www.dlsite.com/maniax/fsr/=/keyword/$enc/per_page/30/');
     if (html == null) return const [];
     final works = <DlsiteWork>[];
     for (final item

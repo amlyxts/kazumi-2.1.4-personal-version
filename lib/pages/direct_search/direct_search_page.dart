@@ -891,8 +891,33 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (mounted) setState(() {});
   }
 
+  /// bgm 条目日文名 (DLsite 检索桥): DLsite 为日文站, 中文标题恒 0 结果;
+  /// 认领/匹配了 bgm 的卡片, 其 name 字段即日文原名。
+  Future<String?> _fetchBgmJpName(String subjectId) async {
+    try {
+      final dio = Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 20),
+        validateStatus: (_) => true,
+      ));
+      final token =
+          GStorage.getSetting(SettingsKeys.bangumiAccessToken).trim();
+      dio.options.headers = {
+        'user-agent': 'kazumi-direct-search/1.0 (dlsite bridge)',
+        if (token.isNotEmpty) 'authorization': 'Bearer $token',
+      };
+      final resp =
+          await dio.get('https://api.bgm.tv/v0/subjects/$subjectId');
+      if (resp.statusCode != 200 || resp.data is! Map) return null;
+      return (resp.data['name'] ?? '').toString().trim();
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// DLsite 关联: 检索 (标题可编辑, DLsite 为日文站, 建议改日文关键词) →
   /// 选中后抓详情 (系列名/卷号/系列总数/评分) 落绑定; 已绑定可解除。
+  /// 已认领/匹配 bgm 的卡片自动取日文名检索 (中文标题恒 0 结果)。
   Future<void> _showDlsiteSearch(_BrowseCard card) async {
     final controller = TextEditingController(text: card.title);
     List<Map<String, dynamic>> results = [];
@@ -911,9 +936,22 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       });
     }
 
+    var autoBridgeTried = false;
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
+          // 弹窗首帧触发一次: 有 bgm 关联则取日文名自动检索
+          if (!autoBridgeTried) {
+            autoBridgeTried = true;
+            final ref = _refFor(card);
+            if (ref != null) {
+              _fetchBgmJpName(ref.subjectId).then((jp) {
+                if (jp == null || jp.isEmpty) return;
+                controller.text = jp;
+                runSearch(setDialogState, jp);
+              });
+            }
+          }
           final current = _dlsiteBinds[card.href];
           return AlertDialog(
             title: Text('DLsite 关联 — ${card.title}',
@@ -995,7 +1033,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                               if (results.isEmpty && searched)
                                 const ListTile(
                                     dense: true,
-                                    title: Text('无结果 (试试日文关键词)',
+                                    title: Text(
+                                        '无结果 — 试试日文原名; 先认领 bgm 条目可自动用日文名检索',
                                         style: TextStyle(fontSize: 13))),
                             ],
                           ),

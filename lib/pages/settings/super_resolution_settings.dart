@@ -3,6 +3,7 @@ import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/bean/settings/settings_list.dart';
+import 'package:kazumi/utils/constants.dart';
 
 class SuperResolutionSettings extends StatefulWidget {
   const SuperResolutionSettings({super.key});
@@ -30,9 +31,11 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
     motionCompensationEnable = GStorage.getSetting<bool>(
       SettingsKeys.playerMotionCompensationEnable,
     );
-    superResolutionMode = SuperResolutionMode.fromStorageValue(
-      GStorage.getSetting<int>(SettingsKeys.defaultSuperResolutionMode),
-    );
+    superResolutionMode = kSupportsSuperResolution
+        ? SuperResolutionMode.fromStorageValue(
+            GStorage.getSetting<int>(SettingsKeys.defaultSuperResolutionMode),
+          )
+        : SuperResolutionMode.off;
   }
 
   @override
@@ -44,16 +47,18 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
           SettingsRadioSection<SuperResolutionMode>(
             title: Text('超分辨率需要启用硬件解码, 若启用硬件解码后仍然不生效, 尝试切换视频渲染器为 gpu'),
             groupValue: superResolutionMode,
-            onChanged: (SuperResolutionMode? value) {
-              if (value == null) return;
-              GStorage.putSetting<int>(
-                SettingsKeys.defaultSuperResolutionMode,
-                value.storageValue,
-              );
-              setState(() {
-                superResolutionMode = value;
-              });
-            },
+            onChanged: kSupportsSuperResolution
+                ? (SuperResolutionMode? value) {
+                    if (value == null) return;
+                    GStorage.putSetting<int>(
+                      SettingsKeys.defaultSuperResolutionMode,
+                      value.storageValue,
+                    );
+                    setState(() {
+                      superResolutionMode = value;
+                    });
+                  }
+                : (SuperResolutionMode? value) {},
             tiles: [
               for (final mode in SuperResolutionMode.values)
                 SettingsTile<SuperResolutionMode>.radioTile(

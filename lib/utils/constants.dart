@@ -182,6 +182,10 @@ final bool kSupportsR18Tabs = !Platform.isIOS;
 /// 本地文件日语学习场景 (kitsunekko 日字), iOS 端不提供入口。
 final bool kSupportsExternalSubtitles = !Platform.isIOS;
 
+/// [my修改] 超分档位仅非 iOS — mpv 着色器在 iOS Metal 后端实测卡顿
+/// (且多数档位静默不生效), iOS 锁定关闭避免选了白费电。
+final bool kSupportsSuperResolution = !Platform.isIOS;
+
 // [my修改] 本地视频在历史记录中使用的虚拟插件名（adapterName），
 // 非空才能让 canRecord 为 true、进度得以持久化。
 const String localVideoPluginName = 'local';

@@ -274,9 +274,13 @@ abstract class _PlayerPlaybackController with Store {
     VideoSourceFormat videoSourceFormat = VideoSourceFormat.auto,
   }) async {
     startOffset = offset;
-    superResolutionMode = SuperResolutionMode.fromStorageValue(
-      GStorage.getSetting(SettingsKeys.defaultSuperResolutionMode),
-    );
+    superResolutionMode =
+          kSupportsSuperResolution
+              ? SuperResolutionMode.fromStorageValue(
+                  GStorage.getSetting(
+                      SettingsKeys.defaultSuperResolutionMode),
+                )
+              : SuperResolutionMode.off;
     hAenable = GStorage.getSetting(SettingsKeys.hAenable);
     androidEnableOpenSLES =
         GStorage.getSetting(SettingsKeys.androidEnableOpenSLES);

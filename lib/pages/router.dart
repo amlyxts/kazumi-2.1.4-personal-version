@@ -22,8 +22,9 @@ class MenuRoute {
           path == '/tab${item.path}/' ||
           path.startsWith('/tab${item.path}/'),
     );
-    // [my修复] 未命中返回 -1 (如按钮直航的 direct_search): 所有页签熄灭,
-    // 原返回 0 会错亮推荐
+    // [my修复] 未命中 (如按钮直航的 direct_search) 返回 -1 表示"无页签";
+    // 调用方 (ScaffoldMenu) 不得把 -1 传给 NavigationBar/Rail (assert 0<=),
+    // 需保持上一个高亮。
     return index < 0 ? -1 : index;
   }
 }

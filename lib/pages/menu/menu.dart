@@ -19,7 +19,12 @@ class ScaffoldMenu extends StatefulWidget {
 
 class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
   final _outletKey = GlobalKey<RouterOutletState>();
-  late int _selectedIndex = menu.indexForPath(widget.location);
+  // [my修复] 初始 -1 (direct_search 直启) 时保持 0; didUpdateWidget 对
+  // -1 保持原高亮 (NavigationBar assert 0<=selectedIndex, 负数白屏)
+  late int _selectedIndex = () {
+    final i = menu.indexForPath(widget.location);
+    return i < 0 ? 0 : i;
+  }();
   DateTime? _lastExitPromptAt;
 
   /// The shell sits at the bottom of the root stack and stays mounted while
@@ -30,7 +35,8 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
   void didUpdateWidget(covariant ScaffoldMenu oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.location != widget.location) {
-      _selectedIndex = menu.indexForPath(widget.location);
+      final i = menu.indexForPath(widget.location);
+      if (i >= 0) _selectedIndex = i; // -1 (直航页) 保持原高亮
     }
   }
 
@@ -229,10 +235,9 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                       heroTag: null,
                       onPressed: () {
                         _lastExitPromptAt = null;
-                        // [my修复] 按路径直航 + 显式熄灭页签高亮 (源搜索
-                        // 不在 destinations, 自动推算会把 location 映射回
-                        // 其他页签)
-                        shellHighlightOverride.value = -1;
+                        // [my修复] 按路径直航; 高亮保持点击前的页签 (源搜索
+                        // 独立于页签体系, 不设 selectedIndex — NavigationBar
+                        // 对负数 selectedIndex 有 assert, 会白屏)
                         _outletKey.currentState
                             ?.navigate('/tab/direct_search/');
                       },

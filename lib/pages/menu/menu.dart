@@ -185,7 +185,7 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             label: '我的',
           ),
         ],
-        selectedIndex: selectedIndex,
+        selectedIndex: selectedIndex < 0 ? -1 : selectedIndex,
         onDestinationSelected: _selectDestination,
       ),
     );
@@ -270,7 +270,7 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                   label: Text('我的'),
                 ),
               ],
-              selectedIndex: selectedIndex,
+              selectedIndex: selectedIndex < 0 ? -1 : selectedIndex,
               onDestinationSelected: _selectDestination,
             ),
           ),

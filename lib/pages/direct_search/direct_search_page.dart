@@ -158,8 +158,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     _collectController.loadCollectibles();
     _collectedIds.addAll(
         _collectController.collectibles.map((c) => c.bangumiItem.id));
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _loadList(reset: true));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // [my修复] 初始加载带记忆页码 — 原先 initState 恢复 _page 后,
+      // 这里仍按默认 page:1 加载并回写, 记忆等于白恢复
+      _loadList(reset: true, page: _rememberedPage > 1 ? _rememberedPage : 1);
+    });
   }
 
   /// 归一化标题 (匹配用)

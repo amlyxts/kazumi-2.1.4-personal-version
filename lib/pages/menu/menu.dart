@@ -220,8 +220,14 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                     FloatingActionButton(
                       elevation: 0,
                       heroTag: null,
-                      onPressed: () => _selectDestination(
-                          menu.indexForPath('/direct_search')),
+                      onPressed: () {
+                        _lastExitPromptAt = null;
+                        // [my修复] 按路径直航: 源搜索不在侧栏 destinations
+                        // 里, 页签索引表与按钮无对应关系 (indexForPath 会
+                        // 错位到里番收藏/推荐)
+                        _outletKey.currentState
+                            ?.navigate('/tab/direct_search/');
+                      },
                       child: const Icon(Icons.travel_explore),
                     ),
                 ],

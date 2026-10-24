@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/services/player/external_playback_launcher.dart';
+import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/pages/player/controller/player_danmaku_controller.dart';
 import 'package:kazumi/pages/player/controller/player_debug_controller.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
@@ -453,6 +455,64 @@ class PlayerController implements Disposable {
 
   Future<void> launchExternalPlayer() async {
     await externalPlayback.launch();
+  }
+
+  // ====== [my新增] 外挂字幕 (mpv sub-file / secondary-sub-file) ======
+  // 主字幕显示在底部 (与画面内烧死字幕同区, 用于替换/遮盖); 第二字幕
+  // (secondary) mpv 渲染在画面顶部 — 中字烧死源 + 顶部日字 = 双语同显
+  // 不重叠, 日语听力的二刷载体。
+
+  /// 文件选择器选外挂字幕并加载。secondary=true 加载为顶部第二字幕。
+  Future<void> pickAndLoadSubtitle({bool secondary = false}) async {
+    final player = playback.mediaPlayer;
+    if (player == null) {
+      KazumiDialog.showToast(message: '播放器未就绪');
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['srt', 'ass', 'ssa'],
+      dialogTitle: secondary ? '选择第二字幕 (顶部)' : '选择字幕文件',
+    );
+    final path = result?.files.single.path;
+    if (path == null) return;
+    await loadSubtitleFile(path, secondary: secondary);
+  }
+
+  /// 按 mpv 属性加载字幕文件 (路径含中文/空格也安全, 走属性不走命令行)。
+  Future<void> loadSubtitleFile(String path, {bool secondary = false}) async {
+    final player = playback.mediaPlayer;
+    final native = player?.platform;
+    if (native is! NativePlayer) {
+      KazumiDialog.showToast(message: '当前平台不支持外挂字幕');
+      return;
+    }
+    try {
+      await native.setProperty(
+          secondary ? 'secondary-sub-file' : 'sub-file', path);
+      await native.setProperty(
+          secondary ? 'secondary-sub-visibility' : 'sub-visibility', 'yes');
+      KazumiDialog.showToast(
+          message: secondary ? '第二字幕已加载 (顶部) — 配合画面中字即为双语' : '字幕已加载');
+      KazumiLogger().i(
+          'Player: ${secondary ? "secondary " : ""}sub loaded: $path');
+    } catch (e) {
+      KazumiDialog.showToast(message: '字幕加载失败: $e');
+      KazumiLogger().w('Player: load subtitle failed', error: e);
+    }
+  }
+
+  /// 清除外挂字幕 (主 + 顶部第二)
+  Future<void> clearSubtitles() async {
+    final native = playback.mediaPlayer?.platform;
+    if (native is! NativePlayer) return;
+    try {
+      await native.setProperty('sid', 'no');
+      await native.setProperty('secondary-sid', 'no');
+      KazumiDialog.showToast(message: '外挂字幕已清除');
+    } catch (e) {
+      KazumiLogger().w('Player: clear subtitles failed', error: e);
+    }
   }
 
   Future<void> createSyncPlayRoom(

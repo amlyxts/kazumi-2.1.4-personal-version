@@ -987,18 +987,66 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (mounted) setState(() {});
   }
 
-  /// 封面反查: 用卡片封面 URL 打开 SauceNAO (服务端抓图, 对动画/同人
-  /// 封面命中率高, 结果含 DLsite 作品链接)。SauceNAO 拦脚本但放行真
-  /// 浏览器, 故只做外链跳转; 找到作品后复制作品号回贴绑定。
+  /// 封面反查: 卡片封面多为 DLsite 原封面, 以图搜图定位作品后复制作品号
+  /// 回贴绑定。三引擎各有索引盲区 (实测 SauceNAO 对 DLsite 封面仅低相似
+  /// 命中): Yandex 精确图匹配最强 (首选), Google Lens 通用, SauceNAO
+  /// 强在动画截图/同人图库。
   Future<void> _openCoverReverseSearch(String thumbUrl) async {
-    final url = 'https://saucenao.com/search.php?url='
-        '${Uri.encodeComponent(thumbUrl)}';
-    try {
-      await launchUrl(Uri.parse(url),
-          mode: LaunchMode.externalApplication);
-    } catch (_) {
-      KazumiDialog.showToast(message: '无法打开浏览器');
-    }
+    final enc = Uri.encodeComponent(thumbUrl);
+    final targets = <(String, String, String)>[
+      (
+        'Yandex 图片 — 封面精确匹配首选',
+        'https://yandex.com/images/search?rpt=imageview&url=$enc',
+        '对商业站封面索引最好, 找一模一样的图'
+      ),
+      (
+        'Google Lens — 通用以图搜图',
+        'https://lens.google.com/uploadbyurl?url=$enc',
+        '全网通用, 可能要求登录 Google'
+      ),
+      (
+        'SauceNAO — 动画截图/同人图库',
+        'https://saucenao.com/search.php?url=$enc',
+        '动画截图与同人图库强, DLsite 封面弱'
+      ),
+    ];
+    await KazumiDialog.show(
+      builder: (context) => AlertDialog(
+        title: const Text('封面反查 — 选择引擎',
+            style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final (name, url, hint) in targets)
+              ListTile(
+                dense: true,
+                title: Text(name,
+                    style: const TextStyle(fontSize: 13)),
+                subtitle: Text(hint,
+                    style: const TextStyle(fontSize: 11)),
+                onTap: () {
+                  KazumiDialog.dismiss();
+                  launchUrl(Uri.parse(url),
+                      mode: LaunchMode.externalApplication);
+                },
+              ),
+            const ListTile(
+              dense: true,
+              title: Text('找到作品后: 复制作品号 (RJ…) 回弹窗粘贴绑定',
+                  style: TextStyle(fontSize: 11)),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: KazumiDialog.dismiss,
+            child: Text('关闭',
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.outline)),
+          ),
+        ],
+      ),
+    );
   }
 
   /// 浏览器打开 DLsite 检索 (人眼看封面定位作品, 简中界面)。

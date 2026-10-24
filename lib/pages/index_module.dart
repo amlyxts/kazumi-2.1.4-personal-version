@@ -4,6 +4,7 @@ import 'package:kazumi/bean/widget/error_widget.dart';
 import 'package:kazumi/bean/widget/image_preview.dart';
 import 'package:kazumi/pages/collect/collect_module.dart';
 import 'package:kazumi/pages/adult_collect/adult_collect_module.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/pages/index_page.dart';
 import 'package:kazumi/pages/info/info_module.dart';
 import 'package:kazumi/pages/init_page.dart';
@@ -63,14 +64,16 @@ final tabModule = createModule(
             )
             ..module(popularModule)
             ..module(timelineModule)
-            ..module(collectModule)
-            // [my修改] 里番收藏页签 (section=1 分区视图, 不同步 Bangumi)
-            ..module(adultCollectModule)
-            // [my修改] 本地视频页签 (仅桌面端注册, 移动端隐藏入口)
-            ..module(localVideoModule)
-            // [my修改] 源直连搜索页签 (R18 规则源入口, 绕过 Bangumi 搜索过滤)
-            ..module(directSearchModule)
-            ..module(myModule);
+            ..module(collectModule);
+          // [my修改] 里番收藏页签 (section=1 分区视图, 不同步 Bangumi;
+          // iOS 不提供)
+          if (kSupportsR18Tabs) sub.module(adultCollectModule);
+          // [my修改] 本地视频页签 (仅桌面端注册, 移动端隐藏入口)
+          sub.module(localVideoModule);
+          // [my修改] 源直连搜索页签 (R18 规则源入口, 绕过 Bangumi 搜索
+          // 过滤; iOS 不提供)
+          if (kSupportsR18Tabs) sub.module(directSearchModule);
+          sub.module(myModule);
         },
       );
   },

@@ -173,6 +173,11 @@ const List<String> mpvEnhanceShaders = [
 // [my修改] 本地视频体系仅桌面端可用，iOS/Android 移动端不提供该功能
 final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
 
+/// [my修改] R18 相关页签 (源直连搜索 / 里番收藏) 不加入 iOS 构建 —
+/// iOS 定位为纯表番观看端 (数据不受影响: 里番收藏经 WebDAV 同步在库,
+/// 只是不展示页签; 追番视图本就过滤 section=1)。
+final bool kSupportsR18Tabs = !Platform.isIOS;
+
 // [my修改] 本地视频在历史记录中使用的虚拟插件名（adapterName），
 // 非空才能让 canRecord 为 true、进度得以持久化。
 const String localVideoPluginName = 'local';

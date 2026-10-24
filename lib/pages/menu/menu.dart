@@ -158,12 +158,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             icon: Icon(Icons.favorite_outlined),
             label: '追番',
           ),
-          // [my修改] 里番收藏页签 (追番下方)
-          const NavigationDestination(
-            selectedIcon: Icon(Icons.folder_special),
-            icon: Icon(Icons.folder_special_outlined),
-            label: '里番收藏',
-          ),
+          // [my修改] 里番收藏页签 (追番下方; iOS 不提供)
+          if (kSupportsR18Tabs)
+            const NavigationDestination(
+              selectedIcon: Icon(Icons.folder_special),
+              icon: Icon(Icons.folder_special_outlined),
+              label: '里番收藏',
+            ),
           // [my修改] 本地视频页签仅桌面端
           if (kSupportsLocalVideo)
             NavigationDestination(
@@ -171,12 +172,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
               icon: Icon(Icons.video_library_outlined),
               label: '本地视频',
             ),
-          // [my修改] 源直连搜索页签
-          const NavigationDestination(
-            selectedIcon: Icon(Icons.travel_explore),
-            icon: Icon(Icons.travel_explore_outlined),
-            label: '源搜索',
-          ),
+          // [my修改] 源直连搜索页签 (iOS 不提供)
+          if (kSupportsR18Tabs)
+            const NavigationDestination(
+              selectedIcon: Icon(Icons.travel_explore),
+              icon: Icon(Icons.travel_explore_outlined),
+              label: '源搜索',
+            ),
           NavigationDestination(
             selectedIcon: Icon(Icons.settings),
             icon: Icon(Icons.settings),
@@ -226,12 +228,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                   icon: Icon(Icons.favorite_border),
                   label: Text('追番'),
                 ),
-                // [my修改] 里番收藏页签 (追番下方)
-                const NavigationRailDestination(
-                  selectedIcon: Icon(Icons.folder_special),
-                  icon: Icon(Icons.folder_special_outlined),
-                  label: Text('里番收藏'),
-                ),
+                // [my修改] 里番收藏页签 (追番下方; iOS 不提供)
+                if (kSupportsR18Tabs)
+                  const NavigationRailDestination(
+                    selectedIcon: Icon(Icons.folder_special),
+                    icon: Icon(Icons.folder_special_outlined),
+                    label: Text('里番收藏'),
+                  ),
                 // [my修改] 本地视频页签仅桌面端
                 if (kSupportsLocalVideo)
                   NavigationRailDestination(
@@ -239,12 +242,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                     icon: Icon(Icons.video_library_outlined),
                     label: Text('本地视频'),
                   ),
-                // [my修改] 源直连搜索页签
-                const NavigationRailDestination(
-                  selectedIcon: Icon(Icons.travel_explore),
-                  icon: Icon(Icons.travel_explore_outlined),
-                  label: Text('源搜索'),
-                ),
+                // [my修改] 源直连搜索页签 (iOS 不提供)
+                if (kSupportsR18Tabs)
+                  const NavigationRailDestination(
+                    selectedIcon: Icon(Icons.travel_explore),
+                    icon: Icon(Icons.travel_explore_outlined),
+                    label: Text('源搜索'),
+                  ),
                 NavigationRailDestination(
                   selectedIcon: Icon(Icons.settings),
                   icon: Icon(Icons.settings_outlined),

@@ -190,6 +190,41 @@ class FlareSolverrService {
     );
   }
 
+  /// [my新增] 启动预热: 校验/刷新过盾 cookies, 首次进入源直连浏览页
+  /// 免过盾等待 (~11s)。cookies 仍有效时一次 curl 即完成 (~2s);
+  /// 失效/缺失时后台 solve 一次并落盘新 cookies。幂等, 每次启动至多
+  /// 一次 solve。
+  static Future<void> warmupDirectSearch() async {
+    try {
+      final site = GStorage.getSetting(SettingsKeys.directSearchSite).trim();
+      if (site.isEmpty || !isConfigured) return;
+      final url = '${site.replaceAll(RegExp(r'/+$'), '')}/search';
+      final cookies =
+          GStorage.getSetting(SettingsKeys.flareSolverrCookies);
+      if (cookies.isEmpty) {
+        KazumiLogger().i('FlareSolverr: 预热 — 无缓存 cookies, 后台求解');
+        await solve(url);
+        return;
+      }
+      final html = await curlFetch(url);
+      final challenged = html != null &&
+          html.contains('challenge-platform') &&
+          !html.contains('video-item-container');
+      if (challenged) {
+        KazumiLogger().i('FlareSolverr: 预热 — cookies 已失效, 后台刷新');
+        await solve(url);
+      } else if (html == null) {
+        // curl 不可用/失败 (如代理未开): 用 solve 试一次, 成功同样落盘
+        KazumiLogger().i('FlareSolverr: 预热 — curl 探测失败, 尝试求解');
+        await solve(url);
+      } else {
+        KazumiLogger().i('FlareSolverr: 预热 — cookies 有效, 无需求解');
+      }
+    } catch (e) {
+      KazumiLogger().w('FlareSolverr: warmup error: $e');
+    }
+  }
+
   /// 渲染播放页并提取主播放器正片直链。
   /// [my提速] curl 直取 (~2s) 优先; cookies 失效/被挑战时提取不到直链,
   /// 落回 FS 起浏览器求解 (~11s, 同时刷新持久化 cookies 供下次直取)。

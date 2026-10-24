@@ -7,6 +7,7 @@ import 'package:kazumi/bean/settings/theme_provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/download/download_directory_service.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:hive_ce_flutter/hive_flutter.dart';
 import 'package:kazumi/services/network/metered_network_service.dart';
 import 'package:kazumi/services/network/ech_http_licenses.dart';
@@ -83,6 +84,12 @@ void main(List<String> args) async {
     return;
   }
   await DownloadDirectoryService().restoreAccess();
+  // [my新增] 延迟后台预热 CF 过盾 cookies: 首次进入源直连浏览页免 11s
+  // 过盾等待。延迟 5s 避开启动期网络高峰, fire-and-forget 不阻塞启动。
+  Future.delayed(
+    const Duration(seconds: 5),
+    FlareSolverrService.warmupDirectSearch,
+  );
   final showWindowButton = DesktopWindowConfig.showWindowButton;
   if (isDesktop()) {
     await windowManager.ensureInitialized();

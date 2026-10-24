@@ -431,21 +431,68 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     return '$_siteBase/search?${params.join('&')}';
   }
 
+  /// 指定页码的完整 URL (与 _loadList 的拼法保持一致, 供预取做缓存键)
+  String _listUrlForPage(int page) {
+    var url = _listUrlFor();
+    if (page > 1) url += '&page=$page';
+    return url;
+  }
+
+  // 预取缓存 (单页): 当前页加载完后后台取下一页, 翻页时命中即秒开。
+  // 以完整 URL 为键, 换分区/标签后键不匹配自动作废。
+  String? _prefetchUrl;
+  _ListPage? _prefetchPage;
+  bool _prefetching = false;
+
+  Future<void> _prefetchNext() async {
+    final next = _nextPage;
+    if (next == null || next <= _page || _prefetching) return;
+    final url = _listUrlForPage(next);
+    if (url == _prefetchUrl) return;
+    _prefetching = true;
+    try {
+      final page = await _fetchList(url);
+      if (page != null && page.cards.isNotEmpty) {
+        _prefetchUrl = url;
+        _prefetchPage = page;
+        // 封面预热: 图片缓存提前拉前 12 张, 命中预取翻页时封面也近乎秒出
+        if (mounted) {
+          for (final c in page.cards.take(12)) {
+            if (c.thumb.isEmpty) continue;
+            precacheImage(CachedNetworkImageProvider(c.thumb), context);
+          }
+        }
+      }
+    } catch (_) {
+      // 预取失败静默丢弃, 翻页时走正常加载
+    } finally {
+      _prefetching = false;
+    }
+  }
+
   Future<void> _loadList({required bool reset, int page = 1}) async {
     if (_siteBase.isEmpty) {
       setState(() => _error = '未配置浏览站点: 网络设置 → 源直连浏览站点');
       return;
     }
     if (_loading) return;
-    var url = _listUrlFor();
-    if (page > 1) url += '&page=$page';
+    final url = _listUrlForPage(page);
     _lastFetchedUrl = url;
     setState(() {
       _loading = true;
       _error = null;
       if (reset) _cards = [];
     });
-    final listPage = await _fetchList(url);
+    // 预取命中: 免网络往返
+    _ListPage? listPage;
+    if (_prefetchUrl == url && _prefetchPage != null) {
+      listPage = _prefetchPage;
+      _prefetchUrl = null;
+      _prefetchPage = null;
+      KazumiLogger().i('DirectSearch: 预取命中 page=$page');
+    } else {
+      listPage = await _fetchList(url);
+    }
     if (!mounted) return;
     setState(() {
       _loading = false;
@@ -462,6 +509,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         _page = page;
       }
     });
+    // 成功后后台预取下一页 (fire-and-forget)
+    if (listPage != null && listPage.cards.isNotEmpty) {
+      _prefetchNext();
+    }
   }
 
   Future<void> _nextPageLoad() => _loadList(reset: false, page: _page + 1);

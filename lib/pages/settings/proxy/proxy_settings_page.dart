@@ -7,6 +7,7 @@ import 'package:kazumi/bean/settings/settings_list.dart';
 import 'package:kazumi/pages/settings/proxy/ocr_channel_editor.dart';
 import 'package:kazumi/pages/settings/proxy/rule_repo_editor.dart';
 import 'package:kazumi/request/apis/plugin_catalog_api.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/services/network/proxy_manager.dart';
 import 'package:kazumi/services/plugin/captcha_ocr_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -151,25 +152,27 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
               ),
             ],
           ),
-          SettingsSection(
-            title: const Text('源直连浏览站点'),
-            tiles: [
-              SettingsTile(
-                leading: Icons.travel_explore_rounded,
-                onPressed: (_) => _editFlareSolverrField(
-                  title: '源直连浏览站点',
-                  settingKey: SettingsKeys.directSearchSite,
-                  hint: 'https://<站点首页>',
+          // [my修改] 源直连浏览站点配置仅非 iOS 平台显示 (iOS 无源搜索功能)
+          if (kSupportsR18Tabs)
+            SettingsSection(
+              title: const Text('源直连浏览站点'),
+              tiles: [
+                SettingsTile(
+                  leading: Icons.travel_explore_rounded,
+                  onPressed: (_) => _editFlareSolverrField(
+                    title: '源直连浏览站点',
+                    settingKey: SettingsKeys.directSearchSite,
+                    hint: 'https://<站点首页>',
+                  ),
+                  title: const Text('浏览站点首页'),
+                  description: Text(() {
+                    final v = GStorage.getSetting(
+                        SettingsKeys.directSearchSite);
+                    return v.isEmpty ? '未配置 (源直连浏览功能关闭)' : v;
+                  }()),
                 ),
-                title: const Text('浏览站点首页'),
-                description: Text(() {
-                  final v = GStorage.getSetting(
-                      SettingsKeys.directSearchSite);
-                  return v.isEmpty ? '未配置 (源直连浏览功能关闭)' : v;
-                }()),
-              ),
-            ],
-          ),
+              ],
+            ),
           SettingsSection(
             title: const Text('FlareSolverr (CF 挑战求解)'),
             tiles: [

@@ -20,7 +20,6 @@ import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/request/core/network_config.dart';
-import 'package:kazumi/services/dlsite/dlsite_service.dart';
 import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -127,9 +126,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   /// 手动认领 (卡片 href → {id, score, votes}): 自动匹配漏网时手动绑定
   /// bgm 条目, JSON 落设置框; 查找优先级高于自动匹配。
   Map<String, Map<String, dynamic>> _claims = {};
-
-  /// DLsite 元数据绑定 (卡片 href → 作品 map): 同人子集补社团/系列/评分。
-  Map<String, Map<String, dynamic>> _dlsiteBinds = {};
   bool _bangumiQuerying = false;
 
   @override
@@ -153,7 +149,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     _genre = _rememberedGenre;
     _activeTags.addAll(_rememberedTags);
     _loadClaims();
-    _loadDlsiteBinds();
     _collectController.loadCollectibles();
     _collectedIds.addAll(
         _collectController.collectibles.map((c) => c.bangumiItem.id));
@@ -883,41 +878,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                         style: TextStyle(fontSize: 11)),
                     onTap: () => _showClaimSearch(card),
                   ),
-                Builder(builder: (context) {
-                  final bind = _dlsiteBinds[card.href];
-                  if (bind == null) {
-                    return ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.video_library, size: 20),
-                      title: const Text('DLsite 关联…',
-                          style: TextStyle(fontSize: 13)),
-                      subtitle: const Text('补社团/系列/评分元数据',
-                          style: TextStyle(fontSize: 11)),
-                      onTap: () => _showDlsiteSearch(card),
-                    );
-                  }
-                  final series = (bind['seriesName'] ?? '').toString();
-                  final count = (bind['seriesCount'] as num?)?.toInt() ?? 0;
-                  return ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.bookmark, size: 20),
-                    title: Text(
-                      series.isNotEmpty
-                          ? '$series${count > 0 ? ' · 共$count作' : ''}'
-                          : (bind['title'] ?? '').toString(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                    subtitle: Text(
-                      'DLsite: ${bind['maker'] ?? ''}  ★${bind['rating'] ?? 0}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11),
-                    ),
-                    onTap: () => _showDlsiteSearch(card),
-                  );
-                }),
               ],
             ),
             actions: [
@@ -951,376 +911,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   KazumiDialog.dismiss();
                 },
                 child: const Text('确定'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  // ====== DLsite 元数据 (同人子集: 社团/系列/评分增强) ======
-
-  void _loadDlsiteBinds() {
-    final raw = GStorage.getSetting(SettingsKeys.directSearchDlsite).trim();
-    if (raw.isEmpty) return;
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        _dlsiteBinds = decoded.map((k, v) =>
-            MapEntry(k.toString(), Map<String, dynamic>.from(v as Map)));
-      }
-    } catch (e) {
-      KazumiLogger().w('DirectSearch: parse dlsite binds failed: $e');
-    }
-  }
-
-  Future<void> _setDlsiteBind(
-      _BrowseCard card, Map<String, dynamic>? bind) async {
-    if (bind == null) {
-      _dlsiteBinds.remove(card.href);
-    } else {
-      _dlsiteBinds[card.href] = bind;
-    }
-    await GStorage.putSetting(
-        SettingsKeys.directSearchDlsite, jsonEncode(_dlsiteBinds));
-    if (mounted) setState(() {});
-  }
-
-  /// 封面反查: 卡片封面多为 DLsite 原封面, 以图搜图定位作品后复制作品号
-  /// 回贴绑定。引擎可达性实测: Bing 直连/代理皆通 (首选); TinEye 走代理;
-  /// Yandex 拦代理出口 (仅直连); SauceNAO 强在动画截图/同人图库, DLsite
-  /// 封面弱。
-  Future<void> _openCoverReverseSearch(String thumbUrl) async {
-    final enc = Uri.encodeComponent(thumbUrl);
-    final targets = <(String, String, String)>[
-      (
-        'Bing 以图搜图 — 首选',
-        'https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl%3A$enc',
-        '直连/代理均可用, 国内友好'
-      ),
-      (
-        'TinEye — 精确匹配老牌',
-        'https://tineye.com/search?url=$enc',
-        '找一模一样的图, 需走代理 (浏览器开着 Clash 即可)'
-      ),
-      (
-        'Yandex — 封面匹配强 (仅直连)',
-        'https://yandex.com/images/search?rpt=imageview&url=$enc',
-        '对代理出口 IP 返回 403, 需切直连环境再用'
-      ),
-      (
-        'SauceNAO — 动画截图/同人图库',
-        'https://saucenao.com/search.php?url=$enc',
-        '动画截图与同人图库强, DLsite 封面弱'
-      ),
-    ];
-    await KazumiDialog.show(
-      builder: (context) => AlertDialog(
-        title: const Text('封面反查 — 选择引擎',
-            style: TextStyle(fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final (name, url, hint) in targets)
-              ListTile(
-                dense: true,
-                title: Text(name,
-                    style: const TextStyle(fontSize: 13)),
-                subtitle: Text(hint,
-                    style: const TextStyle(fontSize: 11)),
-                onTap: () {
-                  KazumiDialog.dismiss();
-                  launchUrl(Uri.parse(url),
-                      mode: LaunchMode.externalApplication);
-                },
-              ),
-            const ListTile(
-              dense: true,
-              title: Text('找到作品后: 复制作品号 (RJ…) 回弹窗粘贴绑定',
-                  style: TextStyle(fontSize: 11)),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: KazumiDialog.dismiss,
-            child: Text('关闭',
-                style: TextStyle(
-                    color: Theme.of(context).colorScheme.outline)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 浏览器打开 DLsite 检索 (人眼看封面定位作品, 简中界面)。
-  /// [my修改] 改为入口选择: 商业动画混排但贴近里番 (PRO 区), 同人区
-  /// 热门排行, 或日文关键词直搜。中文标题恒 0 结果 (语言断层, 实测),
-  /// 关键词项仅在含假名时预填生效。
-  Future<void> _openDlsiteBrowserSearch(String keyword) async {
-    final k = keyword.trim();
-    final hasKana = RegExp(r'[\u3040-\u30ff]').hasMatch(k);
-    final kwUrl = 'https://www.dlsite.com/maniax/fsr/=/keyword/'
-        '${Uri.encodeComponent(k)}/?locale=zh_CN';
-    final targets = <(String, String, String)>[
-      (
-        '商业动画区 (PRO) — 里番主战场',
-        'https://www.dlsite.com/pro/fsr/=/work_type/ANM/?locale=zh_CN',
-        '厂商发行动画 (与同人混排, 但最贴近里番)'
-      ),
-      (
-        '同人区热门排行',
-        'https://www.dlsite.com/maniax/fsr/=/order/trend/?locale=zh_CN',
-        '同人/Motion Anime 主场'
-      ),
-      if (k.isNotEmpty && hasKana)
-        (
-          '关键词搜索: $k',
-          kwUrl,
-          '日文关键词直搜 (简中界面)'
-        ),
-    ];
-    await KazumiDialog.show(
-      builder: (context) => AlertDialog(
-        title: const Text('DLsite 浏览器搜索 — 选择入口',
-            style: TextStyle(fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final (name, url, hint) in targets)
-              ListTile(
-                dense: true,
-                title: Text(name,
-                    style: const TextStyle(fontSize: 13),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis),
-                subtitle: Text(hint,
-                    style: const TextStyle(fontSize: 11)),
-                onTap: () {
-                  KazumiDialog.dismiss();
-                  launchUrl(Uri.parse(url),
-                      mode: LaunchMode.externalApplication);
-                },
-              ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: KazumiDialog.dismiss,
-            child: Text('关闭',
-                style: TextStyle(
-                    color: Theme.of(context).colorScheme.outline)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// bgm 条目日文名 (DLsite 检索桥): DLsite 为日文站, 中文标题恒 0 结果;
-  /// 认领/匹配了 bgm 的卡片, 其 name 字段即日文原名。
-  Future<String?> _fetchBgmJpName(String subjectId) async {
-    try {
-      final dio = Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(seconds: 20),
-        validateStatus: (_) => true,
-      ));
-      final token =
-          GStorage.getSetting(SettingsKeys.bangumiAccessToken).trim();
-      dio.options.headers = {
-        'user-agent': 'kazumi-direct-search/1.0 (dlsite bridge)',
-        if (token.isNotEmpty) 'authorization': 'Bearer $token',
-      };
-      final resp =
-          await dio.get('https://api.bgm.tv/v0/subjects/$subjectId');
-      if (resp.statusCode != 200 || resp.data is! Map) return null;
-      return (resp.data['name'] ?? '').toString().trim();
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// DLsite 关联: 检索 (标题可编辑, DLsite 为日文站, 建议改日文关键词) →
-  /// 选中后抓详情 (系列名/卷号/系列总数/评分) 落绑定; 已绑定可解除。
-  /// 已认领/匹配 bgm 的卡片自动取日文名检索 (中文标题恒 0 结果)。
-  Future<void> _showDlsiteSearch(_BrowseCard card) async {
-    final controller = TextEditingController(text: card.title);
-    List<Map<String, dynamic>> results = [];
-    var querying = false;
-    var searched = false;
-
-    Future<void> runSearch(
-        void Function(void Function()) setDialogState, String keyword) async {
-      if (keyword.trim().isEmpty) return;
-      setDialogState(() => querying = true);
-      final works = await DlsiteService.search(keyword.trim());
-      setDialogState(() {
-        results = works.map((w) => w.toMap()).toList();
-        querying = false;
-        searched = true;
-      });
-    }
-
-    var autoBridgeTried = false;
-    final rjController = TextEditingController();
-    await KazumiDialog.show(
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          // 弹窗首帧触发一次: 有 bgm 关联则取日文名自动检索
-          if (!autoBridgeTried) {
-            autoBridgeTried = true;
-            final ref = _refFor(card);
-            if (ref != null) {
-              _fetchBgmJpName(ref.subjectId).then((jp) {
-                if (jp == null || jp.isEmpty) return;
-                controller.text = jp;
-                runSearch(setDialogState, jp);
-              });
-            }
-          }
-          final current = _dlsiteBinds[card.href];
-          return AlertDialog(
-            title: Text('DLsite 关联 — ${card.title}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 15)),
-            content: SizedBox(
-              width: 420,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (current != null)
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.bookmark, size: 20),
-                      title: Text(
-                        '已关联: ${current['seriesName'] ?? current['title'] ?? ''}'
-                        '${(current['seriesCount'] ?? 0) > 0 ? ' (${current['seriesCount']}作系列)' : ''}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                      subtitle: Text(
-                          '${current['maker'] ?? ''}  ★${current['rating'] ?? 0}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11)),
-                      onTap: () async {
-                        await _setDlsiteBind(card, null);
-                        KazumiDialog.dismiss();
-                      },
-                    ),
-                  Row(children: [
-                    Expanded(
-                      child: TextField(
-                        controller: controller,
-                        onSubmitted: (v) => runSearch(setDialogState, v),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.search),
-                      onPressed: () =>
-                          runSearch(setDialogState, controller.text),
-                    ),
-                  ]),
-                  // 作品号直绑: 中文标题反查 (机翻/EH) 实测 0 命中, 自动桥
-                  // 不可靠; 浏览器看封面人眼定位 → 粘贴作品号一键绑定。
-                  Row(children: [
-                    Expanded(
-                      child: TextField(
-                        controller: rjController,
-                        decoration: const InputDecoration(
-                            hintText: '粘贴作品号 (RJ…) 或作品页链接'),
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '绑定',
-                      icon: const Icon(Icons.link),
-                      onPressed: () async {
-                        final m = RegExp(r'([BR]J\d{5,8})',
-                                caseSensitive: false)
-                            .firstMatch(rjController.text);
-                        if (m == null) {
-                          KazumiDialog.showToast(message: '未识别到作品号');
-                          return;
-                        }
-                        KazumiDialog.showToast(message: '抓取详情…');
-                        final full = await DlsiteService.info(
-                            m.group(1)!.toUpperCase());
-                        if (full == null) {
-                          KazumiDialog.showToast(message: '详情抓取失败, 请重试');
-                          return;
-                        }
-                        await _setDlsiteBind(card, full.toMap());
-                        KazumiDialog.dismiss();
-                      },
-                    ),
-                  ]),
-                  const SizedBox(height: 8),
-                  Flexible(
-                    child: querying
-                        ? const Center(child: CircularProgressIndicator())
-                        : ListView(
-                            shrinkWrap: true,
-                            children: [
-                              for (final w in results)
-                                ListTile(
-                                  dense: true,
-                                  title: Text((w['title'] ?? '').toString(),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 13)),
-                                  subtitle: Text(
-                                      '${w['maker'] ?? ''}  ${w['id'] ?? ''}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 11)),
-                                  onTap: () async {
-                                    KazumiDialog.showToast(message: '抓取详情…');
-                                    final full = await DlsiteService.info(
-                                        (w['id'] ?? '').toString(),
-                                        maker: (w['maker'] ?? '').toString());
-                                    if (full == null) {
-                                      KazumiDialog.showToast(
-                                          message: '详情抓取失败, 请重试');
-                                      return;
-                                    }
-                                    await _setDlsiteBind(card, full.toMap());
-                                    KazumiDialog.dismiss();
-                                  },
-                                ),
-                              if (results.isEmpty && searched)
-                                const ListTile(
-                                    dense: true,
-                                    title: Text(
-                                        '无结果 — 试试日文原名; 先认领 bgm 条目可自动用日文名检索',
-                                        style: TextStyle(fontSize: 13))),
-                            ],
-                          ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              // 封面反查: hanime 封面多为 DLsite 原封面, SauceNAO 服务端
-              // 抓图比对后给出作品链接 (脚本访问被 403, 浏览器正常);
-              // 找到后复制作品号回贴绑定。
-              if (card.thumb.isNotEmpty)
-                TextButton(
-                  onPressed: () => _openCoverReverseSearch(card.thumb),
-                  child: const Text('封面反查'),
-                ),
-              TextButton(
-                onPressed: () => _openDlsiteBrowserSearch(controller.text),
-                child: const Text('浏览器搜索'),
-              ),
-              TextButton(
-                onPressed: KazumiDialog.dismiss,
-                child: Text('关闭',
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.outline)),
               ),
             ],
           );
@@ -1623,7 +1213,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 itemBuilder: (context, index) {
                   final card = _cards[index];
                   final ref = _refFor(card);
-                  final dlsite = _dlsiteBinds[card.href];
                   return InkWell(
                     borderRadius: BorderRadius.circular(8),
                     onTap: () {
@@ -1644,13 +1233,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(8),
                                   child: CachedNetworkImage(
-                                    imageUrl: dlsite != null &&
-                                            (dlsite['thumb'] ?? '')
-                                                .toString()
-                                                .isNotEmpty
-                                        ? (dlsite['thumb'] as String)
-                                            .replaceFirst('//', 'https://')
-                                        : card.thumb,
+                                    imageUrl: card.thumb,
                                     width: double.infinity,
                                     fit: BoxFit.cover,
                                     fadeInDuration:
@@ -1669,26 +1252,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                                   ),
                                 ),
                               ),
-                              // DLsite 已关联角标 (左上)
-                              if (dlsite != null)
-                                Positioned(
-                                  left: 6,
-                                  top: 6,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 5, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black54,
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      'DL ★${dlsite['rating'] ?? 0}',
-                                      style: const TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.white),
-                                    ),
-                                  ),
-                                ),
                               Positioned(
                                 right: 6,
                                 bottom: 6,

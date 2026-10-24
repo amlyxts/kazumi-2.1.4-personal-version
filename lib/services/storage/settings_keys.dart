@@ -488,15 +488,7 @@ class SettingsKeys {
     'directSearchClaims',
     '',
     group: SettingGroup.proxy,
-  );
-  // [my修改] 源直连浏览的 DLsite 元数据绑定 (卡片 href → 作品 id/社团/系列/
-  // 评分), 同人子集增强; JSON map 落设置框, 绑定关系只存本地。
-  static const directSearchDlsite = SettingKey<String>(
-    'directSearchDlsite',
-    '',
-    group: SettingGroup.proxy,
-  );
-  static const proxyConfigured = SettingKey<bool>(
+  );  static const proxyConfigured = SettingKey<bool>(
     _SettingBoxKey.proxyConfigured,
     false,
     group: SettingGroup.proxy,

@@ -4,6 +4,7 @@
 // 过盾取页, 凭证播种后走 dio 快速通道; 站点轮换视频 CDN 域名, 解析按播放器
 // 元素定位)。
 // 播放: 取集 → 伪 bangumi 条目 (md5 稳定 id, 与本地视频模式同构)。
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -349,7 +350,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     return _parseCards(solution.html);
   }
 
-  Future<_ListPage?> _fetchList(String url) async {
+  /// allowFallback=false: 预取/SWR 等投机性流量专用 — 快速通道 (curl/dio)
+  /// 未命中即静默放弃, 不落 FlareSolverr (求解 ~11s, 预取无权调动; cookies
+  /// 失效日扫分类条才不会连环排队求解)。用户触发的加载走默认 true。
+  Future<_ListPage?> _fetchList(String url, {bool allowFallback = true}) async {
     final sw = Stopwatch()..start();
     final viaCurl = await _fetchViaCurl(url);
     if (viaCurl != null && viaCurl.cards.isNotEmpty) {
@@ -362,6 +366,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       KazumiLogger().i(
           'DirectSearch: dio fast path ${sw.elapsedMilliseconds}ms, ${viaDio.cards.length} cards');
       return viaDio;
+    }
+    if (!allowFallback) {
+      KazumiLogger().i('DirectSearch: 预取放弃 (快速通道未命中, 不落 FS)');
+      return null;
     }
     final viaFs = await _fetchViaFlareSolverr(url);
     KazumiLogger().i(
@@ -456,7 +464,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (_pageCache.containsKey(url) || _prefetchInflight.contains(url)) return;
     _prefetchInflight.add(url);
     try {
-      final page = await _fetchList(url);
+      final page = await _fetchList(url, allowFallback: false);
       if (page != null && page.cards.isNotEmpty) {
         _cachePut(url, page);
         // 封面预热: 图片缓存提前拉前 12 张, 命中时封面也近乎秒出
@@ -479,7 +487,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (_prefetchInflight.contains(url)) return;
     _prefetchInflight.add(url);
     try {
-      final fresh = await _fetchList(url);
+      final fresh = await _fetchList(url, allowFallback: false);
       if (fresh == null || fresh.cards.isEmpty) return;
       _cachePut(url, fresh);
       if (!mounted || _lastFetchedUrl != url) return;
@@ -493,10 +501,15 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
-  /// 悬停预取: 桌面端鼠标扫过分区条 = 意图信号, 提前拉该分区第 1 页
+  /// 悬停预取: 桌面端鼠标扫过分区条 = 意图信号, 提前拉该分区第 1 页。
+  /// 200ms 防抖: 快速扫过整条只触发停下的那个, 不为路过者付请求。
+  Timer? _hoverDebounce;
   void _hoverPrefetchGenre(String genre) {
-    if (genre == _genre || _loading || _siteBase.isEmpty) return;
-    _prefetch(_urlForGenre(genre));
+    _hoverDebounce?.cancel();
+    _hoverDebounce = Timer(const Duration(milliseconds: 200), () {
+      if (genre == _genre || _loading || _siteBase.isEmpty) return;
+      _prefetch(_urlForGenre(genre));
+    });
   }
 
   Future<void> _loadList({required bool reset, int page = 1}) async {

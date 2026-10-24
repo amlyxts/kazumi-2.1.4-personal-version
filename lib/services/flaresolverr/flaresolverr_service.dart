@@ -3,6 +3,7 @@
 // 配置: 设置 → 网络 → FlareSolverr (地址留空 = 功能关闭)。
 // 出口一致性: FlareSolverr 需与应用走同一代理出口 (配置代理地址指向 Clash),
 // 否则求解得到的 cf_clearance 因 IP 不匹配对应用请求无效。
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -55,14 +56,76 @@ class FlareSolverrService {
 
   static bool get isConfigured => _baseUrl != null;
 
-  /// 求解 (带一次自动重试): CF 的托管挑战间歇性变难导致求解超时是常见
-  /// 瞬时故障, 隔 2 秒重试一次通常即可通过。
+  // [my修改] 求解串行闸: 同一时间只跑一次求解; 排队者在当前求解完成后
+  // 先用刷新的 cookies 重试快速通道, 能过就不再求解 (并发需求被一次
+  // 求解吸收 — 下载队列并行解析/连点场景不再连环起浏览器)。
+  static bool _solving = false;
+  static Completer<void>? _solvingDone;
+  // [my修改] 失败冷却: 求解失败 (FS 不可达/挑战过不去) 后 30s 内直接
+  // 快速失败, 不连环陪等超时。
+  static DateTime? _solveCooldownUntil;
+
+  static bool get _cooldownActive =>
+      _solveCooldownUntil != null &&
+      DateTime.now().isBefore(_solveCooldownUntil!);
+
+  /// CF 挑战页判定: 挑战页体积很小 (~KB 级), 正常页 >100KB —
+  /// 体积阈值比类名匹配通用 (列表页/播放页/取集页通吃)。
+  static bool _looksChallenged(String html) =>
+      html.contains('challenge-platform') && html.length < 20000;
+
+  /// 用持久化 cookies/UA 构造合成 solution (串行闸排队者快速通道
+  /// 复用路径): html 为 curl 直取的正页。
+  static FlareSolverrSolution _solutionFromCurl(String html) {
+    final ck = GStorage.getSetting(SettingsKeys.flareSolverrCookies);
+    final ua = GStorage.getSetting(SettingsKeys.flareSolverrUA);
+    final cookies = <Map<String, dynamic>>[];
+    for (final pair in ck.split(';')) {
+      final i = pair.indexOf('=');
+      if (i > 0) {
+        cookies.add({
+          'name': pair.substring(0, i).trim(),
+          'value': pair.substring(i + 1),
+        });
+      }
+    }
+    return FlareSolverrSolution(html: html, cookies: cookies, userAgent: ua);
+  }
+
+  /// 求解 (带一次自动重试 + 串行闸 + 失败冷却)。
   static Future<FlareSolverrSolution?> solve(String url) async {
-    final first = await _solveOnce(url);
-    if (first != null) return first;
-    await Future.delayed(const Duration(seconds: 2));
-    KazumiLogger().i('FlareSolverr: 首次求解失败, 重试一次');
-    return _solveOnce(url);
+    if (_cooldownActive) return null;
+    if (_solving) {
+      await _solvingDone?.future;
+      // 别人的求解刚刷新了 cookies: 快速通道先试, 过了就不排队求解
+      final quick = await curlFetch(url, bypassCache: true);
+      if (quick != null && !_looksChallenged(quick)) {
+        KazumiLogger().i('FlareSolverr: 复用刚刷新的 cookies (免求解)');
+        return _solutionFromCurl(quick);
+      }
+      if (_cooldownActive) return null;
+      return solve(url); // 仍被挑战: 再等一轮 (现实中有界)
+    }
+    _solving = true;
+    _solvingDone = Completer<void>();
+    try {
+      final first = await _solveOnce(url);
+      if (first != null) {
+        _solveCooldownUntil = null;
+        return first;
+      }
+      await Future.delayed(const Duration(seconds: 2));
+      KazumiLogger().i('FlareSolverr: 首次求解失败, 重试一次');
+      final second = await _solveOnce(url);
+      _solveCooldownUntil = second == null
+          ? DateTime.now().add(const Duration(seconds: 30))
+          : null;
+      return second;
+    } finally {
+      _solving = false;
+      _solvingDone?.complete();
+      _solvingDone = null;
+    }
   }
 
   static Future<FlareSolverrSolution?> _solveOnce(String url) async {
@@ -110,13 +173,16 @@ class FlareSolverrService {
   /// 带 30s 结果缓存: 播放链路里取集与直链解析抓同一 watch 页, 第二次免网络。
   static final Map<String, (DateTime, String)> _curlCache = {};
 
-  static Future<String?> curlFetch(String url) async {
+  static Future<String?> curlFetch(String url,
+      {bool bypassCache = false}) async {
+    if (!bypassCache) {
     final cached = _curlCache[url];
     if (cached != null) {
       if (DateTime.now().difference(cached.$1) < const Duration(seconds: 30)) {
         return cached.$2;
       }
       _curlCache.remove(url);
+    }
     }
     final cookies = GStorage.getSetting(SettingsKeys.flareSolverrCookies);
     if (cookies.isEmpty) return null;
@@ -143,9 +209,13 @@ class FlareSolverrService {
             'FlareSolverr: curl fetch null | exit=${r.exitCode} len=${body.length} stderr=${r.stderr.toString().trim()}');
         return null;
       }
-      _curlCache[url] = (DateTime.now(), body);
-      if (_curlCache.length > 6) {
-        _curlCache.remove(_curlCache.keys.first);
+      // 挑战页不进缓存: 否则 30s 内后续请求 (含求解后的复用) 会一直
+      // 拿到挑战页误判
+      if (!_looksChallenged(body)) {
+        _curlCache[url] = (DateTime.now(), body);
+        if (_curlCache.length > 6) {
+          _curlCache.remove(_curlCache.keys.first);
+        }
       }
       return body;
     } catch (e) {

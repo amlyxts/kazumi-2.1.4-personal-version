@@ -987,16 +987,18 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (mounted) setState(() {});
   }
 
-  /// 浏览器打开 DLsite 搜索 (人眼看封面定位作品, 浏览器可切简中界面)。
-  /// [my修复] fsr 是路径式参数, 必须以 / 闭合后才能接 ?locale 查询串 —
-  /// 直连 ?locale 会返回 200 但 0 结果的残页; 空关键词时 fsr 为 404,
-  /// 改开 maniax 首页。
+  /// 浏览器打开 DLsite 检索 (人眼看封面定位作品, 简中界面)。
+  /// [my修复] fsr 路径参数须以 / 闭合后再接 ?locale 查询串 (直接拼接
+  /// 返回 200 但 0 结果的残页)。中文标题在 DLsite 恒 0 结果 (语言断层,
+  /// 实测) — 仅日文关键词 (含假名, 如 bgm 桥自动填入) 走关键词搜索,
+  /// 否则开趋势排行封面墙供人眼浏览定位。
   Future<void> _openDlsiteBrowserSearch(String keyword) async {
     final k = keyword.trim();
-    final url = k.isEmpty
-        ? 'https://www.dlsite.com/maniax/?locale=zh_CN'
-        : 'https://www.dlsite.com/maniax/fsr/=/keyword/'
-            '${Uri.encodeComponent(k)}/?locale=zh_CN';
+    final hasKana = RegExp(r'[\u3040-\u30ff]').hasMatch(k);
+    final url = k.isNotEmpty && hasKana
+        ? 'https://www.dlsite.com/maniax/fsr/=/keyword/'
+            '${Uri.encodeComponent(k)}/?locale=zh_CN'
+        : 'https://www.dlsite.com/maniax/fsr/=/order/trend/?locale=zh_CN';
     try {
       await launchUrl(Uri.parse(url),
           mode: LaunchMode.externalApplication);

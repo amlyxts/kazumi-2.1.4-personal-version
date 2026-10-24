@@ -418,14 +418,17 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   String _lastFetchedUrl = '';
 
   /// 构建当前列表 URL: 分区与标签可同时生效 (站点原生支持组合参数)
-  String _listUrlFor() {
+  String _listUrlFor() => _urlForGenre(_genre);
+
+  /// 指定分区的列表 URL (悬停预取用, 不动当前状态)
+  String _urlForGenre(String genre) {
     final params = <String>[];
     if (_activeTags.isNotEmpty) {
       params.addAll(_activeTags
           .map((t) => 'tags%5B%5D=${Uri.encodeComponent(t)}'));
     }
-    if (_genre != '最新') {
-      params.add('genre=${Uri.encodeComponent(_genre)}');
+    if (genre != '最新') {
+      params.add('genre=${Uri.encodeComponent(genre)}');
     }
     if (params.isEmpty) return '$_siteBase/search';
     return '$_siteBase/search?${params.join('&')}';
@@ -438,24 +441,30 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     return url;
   }
 
-  // 预取缓存 (单页): 当前页加载完后后台取下一页, 翻页时命中即秒开。
-  // 以完整 URL 为键, 换分区/标签后键不匹配自动作废。
-  String? _prefetchUrl;
-  _ListPage? _prefetchPage;
-  bool _prefetching = false;
+  // ====== 页面缓存 (LRU ~8 页) + SWR ======
+  // 命中即免网络秒开; 后台取新版本静默替换 (stale-while-revalidate)。
+  // 网络 RTT 实测 ~1.5s (解析仅 ~75ms), 首访省不掉, 命中可全免。
 
-  Future<void> _prefetchNext() async {
-    final next = _nextPage;
-    if (next == null || next <= _page || _prefetching) return;
-    final url = _listUrlForPage(next);
-    if (url == _prefetchUrl) return;
-    _prefetching = true;
+  final Map<String, _ListPage> _pageCache = {};
+  final Set<String> _prefetchInflight = {};
+
+  void _cachePut(String url, _ListPage page) {
+    _pageCache
+      ..remove(url)
+      ..[url] = page;
+    while (_pageCache.length > 8) {
+      _pageCache.remove(_pageCache.keys.first);
+    }
+  }
+
+  Future<void> _prefetch(String url) async {
+    if (_pageCache.containsKey(url) || _prefetchInflight.contains(url)) return;
+    _prefetchInflight.add(url);
     try {
       final page = await _fetchList(url);
       if (page != null && page.cards.isNotEmpty) {
-        _prefetchUrl = url;
-        _prefetchPage = page;
-        // 封面预热: 图片缓存提前拉前 12 张, 命中预取翻页时封面也近乎秒出
+        _cachePut(url, page);
+        // 封面预热: 图片缓存提前拉前 12 张, 命中时封面也近乎秒出
         if (mounted) {
           for (final c in page.cards.take(12)) {
             if (c.thumb.isEmpty) continue;
@@ -466,8 +475,33 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     } catch (_) {
       // 预取失败静默丢弃, 翻页时走正常加载
     } finally {
-      _prefetching = false;
+      _prefetchInflight.remove(url);
     }
+  }
+
+  /// SWR: 缓存命中后的后台刷新 — 拉新版本, 用户仍在本页才静默替换
+  Future<void> _refreshInBackground(String url) async {
+    if (_prefetchInflight.contains(url)) return;
+    _prefetchInflight.add(url);
+    try {
+      final fresh = await _fetchList(url);
+      if (fresh == null || fresh.cards.isEmpty) return;
+      _cachePut(url, fresh);
+      if (!mounted || _lastFetchedUrl != url) return;
+      setState(() {
+        _cards = fresh.cards;
+        _nextPage = fresh.nextPage;
+      });
+    } catch (_) {
+    } finally {
+      _prefetchInflight.remove(url);
+    }
+  }
+
+  /// 悬停预取: 桌面端鼠标扫过分区条 = 意图信号, 提前拉该分区第 1 页
+  void _hoverPrefetchGenre(String genre) {
+    if (genre == _genre || _loading || _siteBase.isEmpty) return;
+    _prefetch(_urlForGenre(genre));
   }
 
   Future<void> _loadList({required bool reset, int page = 1}) async {
@@ -478,21 +512,29 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (_loading) return;
     final url = _listUrlForPage(page);
     _lastFetchedUrl = url;
+    // 缓存命中: 即刻上屏 + 后台刷新 (免 1.5s 网络 RTT)
+    final cached = _pageCache[url];
+    if (cached != null) {
+      setState(() {
+        _loading = false;
+        _error = null;
+        _cards = cached.cards;
+        _nextPage = cached.nextPage;
+        _page = page;
+      });
+      _refreshInBackground(url);
+      // 后台顺带预取下一页
+      if (_nextPage != null && _nextPage! > _page) {
+        _prefetch(_listUrlForPage(page + 1));
+      }
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
       if (reset) _cards = [];
     });
-    // 预取命中: 免网络往返
-    _ListPage? listPage;
-    if (_prefetchUrl == url && _prefetchPage != null) {
-      listPage = _prefetchPage;
-      _prefetchUrl = null;
-      _prefetchPage = null;
-      KazumiLogger().i('DirectSearch: 预取命中 page=$page');
-    } else {
-      listPage = await _fetchList(url);
-    }
+    final listPage = await _fetchList(url);
     if (!mounted) return;
     setState(() {
       _loading = false;
@@ -509,9 +551,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         _page = page;
       }
     });
-    // 成功后后台预取下一页 (fire-and-forget)
+    // 成功后入缓存并后台预取下一页 (fire-and-forget)
     if (listPage != null && listPage.cards.isNotEmpty) {
-      _prefetchNext();
+      _cachePut(url, listPage);
+      if (_nextPage != null && _nextPage! > _page) {
+        _prefetch(_listUrlForPage(page + 1));
+      }
     }
   }
 
@@ -1358,16 +1403,21 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 for (final g in ['最新', ..._genres])
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: ChoiceChip(
-                      label: Text(g),
-                      selected: _genre == g,
-                      onSelected: (_) {
-                        setState(() {
-                          _genre = g;
-                          _rememberedGenre = g;
-                        });
-                        _loadList(reset: true);
-                      },
+                    // 悬停预取: 鼠标扫过即后台拉取该分区第 1 页, 点击命中
+                    // 缓存免 1.5s 网络 RTT
+                    child: MouseRegion(
+                      onEnter: (_) => _hoverPrefetchGenre(g),
+                      child: ChoiceChip(
+                        label: Text(g),
+                        selected: _genre == g,
+                        onSelected: (_) {
+                          setState(() {
+                            _genre = g;
+                            _rememberedGenre = g;
+                          });
+                          _loadList(reset: true);
+                        },
+                      ),
                     ),
                   ),
               ],

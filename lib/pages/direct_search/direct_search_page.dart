@@ -1081,6 +1081,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         ..clear()
         ..addAll(selected);
     });
+    // [my修复] 回写静态记忆 — 原实现从未写入 _rememberedTags, 标签记忆
+    // 自上线起实际未生效 (切走再回/重建后标签丢失)
+    _rememberedTags
+      ..clear()
+      ..addAll(selected);
     await _loadList(reset: true);
   }
 

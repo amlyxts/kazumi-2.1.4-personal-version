@@ -891,6 +891,20 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (mounted) setState(() {});
   }
 
+  /// 浏览器打开 DLsite 搜索 (人眼看封面定位作品, 浏览器可切简中界面)。
+  Future<void> _openDlsiteBrowserSearch(String keyword) async {
+    final q = keyword.trim().isEmpty
+        ? ''
+        : '/keyword/${Uri.encodeComponent(keyword.trim())}';
+    final url = Uri.parse(
+        'https://www.dlsite.com/maniax/fsr/=$q?locale=zh_CN');
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      KazumiDialog.showToast(message: '无法打开浏览器');
+    }
+  }
+
   /// bgm 条目日文名 (DLsite 检索桥): DLsite 为日文站, 中文标题恒 0 结果;
   /// 认领/匹配了 bgm 的卡片, 其 name 字段即日文原名。
   Future<String?> _fetchBgmJpName(String subjectId) async {
@@ -937,6 +951,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
 
     var autoBridgeTried = false;
+    final rjController = TextEditingController();
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
@@ -997,6 +1012,40 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                           runSearch(setDialogState, controller.text),
                     ),
                   ]),
+                  // 作品号直绑: 中文标题反查 (机翻/EH) 实测 0 命中, 自动桥
+                  // 不可靠; 浏览器看封面人眼定位 → 粘贴作品号一键绑定。
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: rjController,
+                        decoration: const InputDecoration(
+                            hintText: '粘贴作品号 (RJ…) 或作品页链接'),
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '绑定',
+                      icon: const Icon(Icons.link),
+                      onPressed: () async {
+                        final m = RegExp(r'([BR]J\d{5,8})',
+                                caseSensitive: false)
+                            .firstMatch(rjController.text);
+                        if (m == null) {
+                          KazumiDialog.showToast(message: '未识别到作品号');
+                          return;
+                        }
+                        KazumiDialog.showToast(message: '抓取详情…');
+                        final full = await DlsiteService.info(
+                            m.group(1)!.toUpperCase());
+                        if (full == null) {
+                          KazumiDialog.showToast(message: '详情抓取失败, 请重试');
+                          return;
+                        }
+                        await _setDlsiteBind(card, full.toMap());
+                        KazumiDialog.dismiss();
+                      },
+                    ),
+                  ]),
                   const SizedBox(height: 8),
                   Flexible(
                     child: querying
@@ -1043,6 +1092,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ),
             ),
             actions: [
+              TextButton(
+                onPressed: () => _openDlsiteBrowserSearch(controller.text),
+                child: const Text('浏览器搜索'),
+              ),
               TextButton(
                 onPressed: KazumiDialog.dismiss,
                 child: Text('关闭',

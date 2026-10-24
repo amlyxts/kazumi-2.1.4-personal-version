@@ -13,7 +13,7 @@ import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/dialog/dialog_task.dart';
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
-import 'package:kazumi/modules/bangumi/bangumi_collection_type.dart';
+import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
@@ -834,11 +834,13 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   Future<void> _showCollectTypePicker(_BrowseCard card) async {
     final item = _fabricatedItem(card);
     final wasCollected = _collectedIds.contains(item.id);
-    int? selectedType = wasCollected ? 2 : null; // 预选: 已收藏默认看过
+    // [my修复] 本地存储用 CollectType 语义 (1=在看 2=想看 4=看过), 与
+    // Bangumi API 枚举 (1=想看 2=看过) 数值不同 — 之前传错枚举导致选项错位。
+    int? selectedType = wasCollected ? CollectType.watched.value : null;
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
-          Widget typeOption(BangumiCollectionType t) => RadioListTile<int>(
+          Widget typeOption(CollectType t) => RadioListTile<int>(
                 value: t.value,
                 groupValue: selectedType,
                 title: Text(t.label),
@@ -854,11 +856,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               mainAxisSize: MainAxisSize.min,
               children: [
                 for (final t in [
-                  BangumiCollectionType.planToWatch,
-                  BangumiCollectionType.watched,
-                  BangumiCollectionType.watching,
-                  BangumiCollectionType.onHold,
-                  BangumiCollectionType.abandoned,
+                  CollectType.planToWatch,
+                  CollectType.watched,
+                  CollectType.watching,
+                  CollectType.onHold,
+                  CollectType.abandoned,
                 ])
                   typeOption(t),
                 if (wasCollected)
@@ -890,12 +892,20 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               TextButton(
                 onPressed: () {
                   final type = selectedType;
-                  if (type == null || type <= 0) return;
+                  if (type == null) return;
                   final ref = _refFor(card);
                   // 弹窗打开期间可能刚完成认领, 条目 id 会从哈希变真实条目,
                   // 现取现用避免拿旧 id 走同步。
                   final item = _fabricatedItem(card);
-                  if (ref != null) {
+                  // [my修复] type==0 (取消收藏) 此前被提前 return 拦死,
+                  // 从未生效; 现按有无 bgm 匹配走对应删除路径。
+                  if (type == 0) {
+                    if (ref != null) {
+                      _collectController.deleteCollect(item);
+                    } else {
+                      _collectController.deleteCollectLocalOnly(item);
+                    }
+                  } else if (ref != null) {
                     // 匹配 bgm 条目: 走同步路径 (真实条目 id)
                     _collectController.addCollect(item, type: type);
                   } else {
@@ -903,12 +913,18 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                     _collectController
                         .addCollectLocalOnly(item, type: type);
                   }
-                  if (selectedType == 0) {
-                    _collectedIds.remove(item.id);
-                  } else {
-                    _collectedIds.add(item.id);
-                  }
+                  // [my修复] setState 刷新星标 + toast 反馈
+                  final label = CollectType.fromValue(type).label;
+                  setState(() {
+                    if (type == 0) {
+                      _collectedIds.remove(item.id);
+                    } else {
+                      _collectedIds.add(item.id);
+                    }
+                  });
                   KazumiDialog.dismiss();
+                  KazumiDialog.showToast(
+                      message: type == 0 ? '已取消收藏' : '已收藏 · $label');
                 },
                 child: const Text('确定'),
               ),

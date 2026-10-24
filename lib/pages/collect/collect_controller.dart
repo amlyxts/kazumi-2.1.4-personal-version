@@ -71,14 +71,9 @@ abstract class _CollectController with Store {
       return;
     }
 
-    final bool syncSucceeded = await _syncBangumiCollectIfEnabled(
-      bangumiItem.id,
-      type,
-    );
-    if (!syncSucceeded) {
-      return;
-    }
-
+    // [my修改] 本地优先: 先落本地与变更日志 (WebDAV 增量随日志走), Bangumi
+    // 同步尽力而为 — 失败只提示不回滚 (此前同步失败会取消本次修改, 网络
+    // 抖动时本地也改不动)。未同步的差异由后续手动/自动全量同步收敛。
     final int currentCollectType = getCollectType(bangumiItem);
     final int collectChangeAction = currentCollectType == 0 ? 1 : 2;
 
@@ -89,6 +84,11 @@ abstract class _CollectController with Store {
       type: type,
     );
     loadCollectibles();
+
+    await _syncBangumiCollectIfEnabled(
+      bangumiItem.id,
+      type,
+    );
   }
 
   @action
@@ -195,7 +195,7 @@ abstract class _CollectController with Store {
         KazumiDialog.showToast(message: '已同步到 Bangumi');
         return true;
       } else if (!synced) {
-        KazumiDialog.showToast(message: '同步到 Bangumi 失败，已取消本次状态修改');
+        KazumiDialog.showToast(message: '本地已保存；同步到 Bangumi 失败，稍后同步会自动重试');
         KazumiLogger().w(
           'Bangumi: immediate collect sync did not complete. bangumiId=$bangumiId, type=$localType',
         );
@@ -205,7 +205,7 @@ abstract class _CollectController with Store {
     } catch (e, stackTrace) {
       KazumiDialog.showToast(
           message:
-              '同步到 Bangumi 失败，已取消本次状态修改：${BangumiSyncService.describeError(e)}');
+              '本地已保存；同步到 Bangumi 失败：${BangumiSyncService.describeError(e)}');
       KazumiLogger().e(
         'Bangumi: immediate collect sync failed. bangumiId=$bangumiId, type=$localType',
         error: e,

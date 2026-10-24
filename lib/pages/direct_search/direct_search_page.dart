@@ -20,6 +20,7 @@ import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/request/core/network_config.dart';
+import 'package:kazumi/services/dlsite/dlsite_service.dart';
 import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -126,6 +127,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   /// 手动认领 (卡片 href → {id, score, votes}): 自动匹配漏网时手动绑定
   /// bgm 条目, JSON 落设置框; 查找优先级高于自动匹配。
   Map<String, Map<String, dynamic>> _claims = {};
+
+  /// DLsite 元数据绑定 (卡片 href → 作品 map): 同人子集补社团/系列/评分。
+  Map<String, Map<String, dynamic>> _dlsiteBinds = {};
   bool _bangumiQuerying = false;
 
   @override
@@ -149,6 +153,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     _genre = _rememberedGenre;
     _activeTags.addAll(_rememberedTags);
     _loadClaims();
+    _loadDlsiteBinds();
     _collectController.loadCollectibles();
     _collectedIds.addAll(
         _collectController.collectibles.map((c) => c.bangumiItem.id));
@@ -782,6 +787,41 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                         style: TextStyle(fontSize: 11)),
                     onTap: () => _showClaimSearch(card),
                   ),
+                Builder(builder: (context) {
+                  final bind = _dlsiteBinds[card.href];
+                  if (bind == null) {
+                    return ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.video_library, size: 20),
+                      title: const Text('DLsite 关联…',
+                          style: TextStyle(fontSize: 13)),
+                      subtitle: const Text('补社团/系列/评分元数据',
+                          style: TextStyle(fontSize: 11)),
+                      onTap: () => _showDlsiteSearch(card),
+                    );
+                  }
+                  final series = (bind['seriesName'] ?? '').toString();
+                  final count = (bind['seriesCount'] as num?)?.toInt() ?? 0;
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.bookmark, size: 20),
+                    title: Text(
+                      series.isNotEmpty
+                          ? '$series${count > 0 ? ' · 共$count作' : ''}'
+                          : (bind['title'] ?? '').toString(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    subtitle: Text(
+                      'DLsite: ${bind['maker'] ?? ''}  ★${bind['rating'] ?? 0}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    onTap: () => _showDlsiteSearch(card),
+                  );
+                }),
               ],
             ),
             actions: [
@@ -815,6 +855,160 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   KazumiDialog.dismiss();
                 },
                 child: const Text('确定'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ====== DLsite 元数据 (同人子集: 社团/系列/评分增强) ======
+
+  void _loadDlsiteBinds() {
+    final raw = GStorage.getSetting(SettingsKeys.directSearchDlsite).trim();
+    if (raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        _dlsiteBinds = decoded.map((k, v) =>
+            MapEntry(k.toString(), Map<String, dynamic>.from(v as Map)));
+      }
+    } catch (e) {
+      KazumiLogger().w('DirectSearch: parse dlsite binds failed: $e');
+    }
+  }
+
+  Future<void> _setDlsiteBind(
+      _BrowseCard card, Map<String, dynamic>? bind) async {
+    if (bind == null) {
+      _dlsiteBinds.remove(card.href);
+    } else {
+      _dlsiteBinds[card.href] = bind;
+    }
+    await GStorage.putSetting(
+        SettingsKeys.directSearchDlsite, jsonEncode(_dlsiteBinds));
+    if (mounted) setState(() {});
+  }
+
+  /// DLsite 关联: 检索 (标题可编辑, DLsite 为日文站, 建议改日文关键词) →
+  /// 选中后抓详情 (系列名/卷号/系列总数/评分) 落绑定; 已绑定可解除。
+  Future<void> _showDlsiteSearch(_BrowseCard card) async {
+    final controller = TextEditingController(text: card.title);
+    List<Map<String, dynamic>> results = [];
+    var querying = false;
+    var searched = false;
+
+    Future<void> runSearch(
+        void Function(void Function()) setDialogState, String keyword) async {
+      if (keyword.trim().isEmpty) return;
+      setDialogState(() => querying = true);
+      final works = await DlsiteService.search(keyword.trim());
+      setDialogState(() {
+        results = works.map((w) => w.toMap()).toList();
+        querying = false;
+        searched = true;
+      });
+    }
+
+    await KazumiDialog.show(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final current = _dlsiteBinds[card.href];
+          return AlertDialog(
+            title: Text('DLsite 关联 — ${card.title}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 15)),
+            content: SizedBox(
+              width: 420,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (current != null)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.bookmark, size: 20),
+                      title: Text(
+                        '已关联: ${current['seriesName'] ?? current['title'] ?? ''}'
+                        '${(current['seriesCount'] ?? 0) > 0 ? ' (${current['seriesCount']}作系列)' : ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                      subtitle: Text(
+                          '${current['maker'] ?? ''}  ★${current['rating'] ?? 0}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11)),
+                      onTap: () async {
+                        await _setDlsiteBind(card, null);
+                        KazumiDialog.dismiss();
+                      },
+                    ),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        onSubmitted: (v) => runSearch(setDialogState, v),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.search),
+                      onPressed: () =>
+                          runSearch(setDialogState, controller.text),
+                    ),
+                  ]),
+                  const SizedBox(height: 8),
+                  Flexible(
+                    child: querying
+                        ? const Center(child: CircularProgressIndicator())
+                        : ListView(
+                            shrinkWrap: true,
+                            children: [
+                              for (final w in results)
+                                ListTile(
+                                  dense: true,
+                                  title: Text((w['title'] ?? '').toString(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 13)),
+                                  subtitle: Text(
+                                      '${w['maker'] ?? ''}  ${w['id'] ?? ''}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 11)),
+                                  onTap: () async {
+                                    KazumiDialog.showToast(message: '抓取详情…');
+                                    final full = await DlsiteService.info(
+                                        (w['id'] ?? '').toString(),
+                                        maker: (w['maker'] ?? '').toString());
+                                    if (full == null) {
+                                      KazumiDialog.showToast(
+                                          message: '详情抓取失败, 请重试');
+                                      return;
+                                    }
+                                    await _setDlsiteBind(card, full.toMap());
+                                    KazumiDialog.dismiss();
+                                  },
+                                ),
+                              if (results.isEmpty && searched)
+                                const ListTile(
+                                    dense: true,
+                                    title: Text('无结果 (试试日文关键词)',
+                                        style: TextStyle(fontSize: 13))),
+                            ],
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: KazumiDialog.dismiss,
+                child: Text('关闭',
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.outline)),
               ),
             ],
           );
@@ -1112,6 +1306,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 itemBuilder: (context, index) {
                   final card = _cards[index];
                   final ref = _refFor(card);
+                  final dlsite = _dlsiteBinds[card.href];
                   return InkWell(
                     borderRadius: BorderRadius.circular(8),
                     onTap: () {
@@ -1132,7 +1327,13 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(8),
                                   child: CachedNetworkImage(
-                                    imageUrl: card.thumb,
+                                    imageUrl: dlsite != null &&
+                                            (dlsite['thumb'] ?? '')
+                                                .toString()
+                                                .isNotEmpty
+                                        ? (dlsite['thumb'] as String)
+                                            .replaceFirst('//', 'https://')
+                                        : card.thumb,
                                     width: double.infinity,
                                     fit: BoxFit.cover,
                                     fadeInDuration:
@@ -1151,6 +1352,26 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                                   ),
                                 ),
                               ),
+                              // DLsite 已关联角标 (左上)
+                              if (dlsite != null)
+                                Positioned(
+                                  left: 6,
+                                  top: 6,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 5, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black54,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      'DL ★${dlsite['rating'] ?? 0}',
+                                      style: const TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.white),
+                                    ),
+                                  ),
+                                ),
                               Positioned(
                                 right: 6,
                                 bottom: 6,

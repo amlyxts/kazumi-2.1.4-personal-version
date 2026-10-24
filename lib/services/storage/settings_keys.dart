@@ -592,6 +592,22 @@ class SettingsKeys {
     '',
     group: SettingGroup.sync,
   );
+  // [my新增] 插件/设置云同步开关 (第五/六路)
+  static const webDavEnablePluginSync = SettingKey<bool>(
+    'webDavEnablePluginSync',
+    false,
+    group: SettingGroup.sync,
+  );
+  static const webDavEnableSettingsSync = SettingKey<bool>(
+    'webDavEnableSettingsSync',
+    false,
+    group: SettingGroup.sync,
+  );
+  static const webDavSettingsSyncUpdatedAt = SettingKey<int>(
+    'webDavSettingsSyncUpdatedAt',
+    0,
+    group: SettingGroup.sync,
+  );
   static const downloadDanmaku = SettingKey<bool>(
     _SettingBoxKey.downloadDanmaku,
     true,
@@ -767,6 +783,9 @@ class SettingsKeys {
     danmakuAlignmentMap,
     webDavEnableDanmakuAlignment,
     danmakuAlignmentDeviceId,
+    webDavEnablePluginSync,
+    webDavEnableSettingsSync,
+    webDavSettingsSyncUpdatedAt,
     downloadDanmaku,
     downloadDirectory,
     downloadDirectoryBookmark,
@@ -784,6 +803,44 @@ class SettingsKeys {
     defaultVolume,
     playerMuted,
   ];
+
+  /// [my新增] 设置云同步排除名单: 敏感凭据/一次性流程标记/平台相关项
+  /// 不入云 (跨设备指错路径或泄露凭据)。
+  static const Set<String> settingsSyncExcluded = {
+    'bangumiAccessToken',
+    'proxyConfigured',
+    'shortcutDialogShown',
+    'onboardingCompleted',
+    'defaultStartupPage',
+    'downloadDirectory',
+    'downloadDirectoryBookmark',
+    'webDavURL',
+    'webDavUsername',
+    'webDavPassword',
+    'webDavEnable',
+    'webDavEnableHistory',
+    'webDavEnableCollect',
+    'webDavEnableDanmakuShield',
+    'webDavEnableDanmakuAlignment',
+    'webDavEnablePluginSync',
+    'webDavEnableSettingsSync',
+    'webDavSettingsSyncUpdatedAt',
+    'danmakuAlignmentDeviceId',
+    'danmakuShieldSyncDeviceId',
+    'danmakuShieldSyncState',
+    'danmakuShieldSyncCorruptState',
+    'historySyncSnapshotInitialized',
+    'flareSolverrCookies',
+    'flareSolverrUA',
+  };
+
+  /// [my新增] 按名称查键 (设置云同步合并用; 版本差异时云端多出的键安全跳过)
+  static SettingKey<Object?>? byName(String name) {
+    for (final key in all) {
+      if (key.name == name) return key;
+    }
+    return null;
+  }
 
   static List<SettingKey<Object?>> byGroup(SettingGroup group) {
     return [

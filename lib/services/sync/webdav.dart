@@ -101,6 +101,98 @@ class WebDav {
 
   /// [my新增] 弹幕对齐表同步 (仿弹幕屏蔽词: per-device JSON, 合并回调
   /// 在服务层做时间戳新旧取舍)。
+  static const String _pluginsPath = '$_syncRootPath/plugins.json';
+  static const String _settingsPath = '$_syncRootPath/settings.json';
+
+  bool get isPluginSyncEnabled =>
+      GStorage.getSetting(SettingsKeys.webDavEnable) &&
+      GStorage.getSetting(SettingsKeys.webDavEnablePluginSync);
+
+  bool get isSettingsSyncEnabled =>
+      GStorage.getSetting(SettingsKeys.webDavEnable) &&
+      GStorage.getSetting(SettingsKeys.webDavEnableSettingsSync);
+
+  /// [my新增] 插件清单同步: 并集合并 (按插件名), 回调在控制器层做合并裁决。
+  Future<void> syncPlugins({
+    required Future<String> Function(String remoteJson) merge,
+    required String Function() export,
+  }) {
+    return _runWebDavExclusive(() async {
+      if (!isPluginSyncEnabled) return;
+      if (!initialized) await _init();
+      await _ensureLocalTempDirectory();
+      await _ensureRemoteDirectory(_syncRootPath);
+      final runDirectory =
+          await webDavLocalTempDirectory.createTemp('plugin-sync-');
+      try {
+        var remoteJson = '';
+        final file = File('${runDirectory.path}/remote.json');
+        try {
+          await client.read2File(_pluginsPath, file.path);
+          remoteJson = await file.readAsString();
+        } catch (_) {
+          remoteJson = ''; // 云端还没有清单
+        }
+        if (!isPluginSyncEnabled) return;
+        final merged = await merge(remoteJson);
+        final upload = File('${runDirectory.path}/local.json');
+        await upload.writeAsString(merged, flush: true);
+        await _publishRemoteFile(
+          sourceFilePath: upload.path,
+          destinationPath: _pluginsPath,
+          temporaryPath: '$_pluginsPath.cache',
+        );
+      } finally {
+        await runDirectory.delete(recursive: true);
+      }
+    });
+  }
+
+  /// [my新增] 设置快照同步 (排除名单外的键), 最近写入优先 (updatedAt)。
+  Future<void> syncSettings({
+    required Future<Map<String, dynamic>> Function(
+            Map<String, dynamic> remote, int remoteUpdatedAt)
+        merge,
+    required Map<String, dynamic> Function() export,
+    required int Function() localUpdatedAt,
+  }) {
+    return _runWebDavExclusive(() async {
+      if (!isSettingsSyncEnabled) return;
+      if (!initialized) await _init();
+      await _ensureRemoteDirectory(_syncRootPath);
+      final runDirectory =
+          await webDavLocalTempDirectory.createTemp('settings-sync-');
+      try {
+        var remote = <String, dynamic>{};
+        var remoteUpdatedAt = 0;
+        final file = File('${runDirectory.path}/remote.json');
+        try {
+          await client.read2File(_settingsPath, file.path);
+          final decoded = jsonDecodeOrNull(await file.readAsString());
+          if (decoded is Map<String, dynamic>) {
+            remote = decoded['_data'] is Map<String, dynamic>
+                ? decoded['_data']
+                : decoded;
+            remoteUpdatedAt = (decoded['_updatedAt'] as num?)?.toInt() ?? 0;
+          }
+        } catch (_) {}
+        if (!isSettingsSyncEnabled) return;
+        final merged = await merge(remote, remoteUpdatedAt);
+        final payload = jsonEncode(
+            {'_updatedAt': localUpdatedAt(), '_data': merged});
+        final upload = File('${runDirectory.path}/local.json');
+        await upload.writeAsString(payload, flush: true);
+        await _publishRemoteFile(
+          sourceFilePath: upload.path,
+          destinationPath: _settingsPath,
+          temporaryPath: '$_settingsPath.cache',
+        );
+      } finally {
+        await runDirectory.delete(recursive: true);
+      }
+    });
+  }
+
   Future<void> syncDanmakuAlignment({
     required String deviceId,
     required Future<Map<String, dynamic>> Function(Map<String, dynamic>)

@@ -83,6 +83,8 @@ class _WebDavSyncPageState extends State<WebDavSyncPage> {
     final history = GStorage.getSetting(SettingsKeys.webDavEnableHistory);
     final collect = GStorage.getSetting(SettingsKeys.webDavEnableCollect);
     final shield = GStorage.getSetting(SettingsKeys.webDavEnableDanmakuShield);
+    final pluginSync = GStorage.getSetting(SettingsKeys.webDavEnablePluginSync);
+    final settingsSync = GStorage.getSetting(SettingsKeys.webDavEnableSettingsSync);
     final url = GStorage.getSetting(SettingsKeys.webDavURL).trim();
     final configured = url.isNotEmpty;
     final host = Uri.tryParse(url)?.host;
@@ -164,6 +166,32 @@ class _WebDavSyncPageState extends State<WebDavSyncPage> {
                     if (!mounted) return;
                     setState(() {});
                     if (syncEnabled) await _syncDanmakuShield();
+                  },
+                ),
+                SettingsTile.switchTile(
+                  leading: Icons.extension_rounded,
+                  title: const Text('插件列表'),
+                  description: const Text('同步规则源清单, 重装免逐个重装'),
+                  initialValue: pluginSync,
+                  enabled: enabled && !_busy,
+                  onToggle: (value) async {
+                    await GStorage.putSetting(
+                        SettingsKeys.webDavEnablePluginSync,
+                        value ?? !pluginSync);
+                    if (mounted) setState(() {});
+                  },
+                ),
+                SettingsTile.switchTile(
+                  leading: Icons.tune_rounded,
+                  title: const Text('应用设置'),
+                  description: const Text('同步代理/播放器/下载等设置 (登录凭据不入云)'),
+                  initialValue: settingsSync,
+                  enabled: enabled && !_busy,
+                  onToggle: (value) async {
+                    await GStorage.putSetting(
+                        SettingsKeys.webDavEnableSettingsSync,
+                        value ?? !settingsSync);
+                    if (mounted) setState(() {});
                   },
                 ),
               ],

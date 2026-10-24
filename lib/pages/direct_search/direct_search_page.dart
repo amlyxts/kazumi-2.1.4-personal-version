@@ -988,21 +988,26 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   }
 
   /// 封面反查: 卡片封面多为 DLsite 原封面, 以图搜图定位作品后复制作品号
-  /// 回贴绑定。三引擎各有索引盲区 (实测 SauceNAO 对 DLsite 封面仅低相似
-  /// 命中): Yandex 精确图匹配最强 (首选), Google Lens 通用, SauceNAO
-  /// 强在动画截图/同人图库。
+  /// 回贴绑定。引擎可达性实测: Bing 直连/代理皆通 (首选); TinEye 走代理;
+  /// Yandex 拦代理出口 (仅直连); SauceNAO 强在动画截图/同人图库, DLsite
+  /// 封面弱。
   Future<void> _openCoverReverseSearch(String thumbUrl) async {
     final enc = Uri.encodeComponent(thumbUrl);
     final targets = <(String, String, String)>[
       (
-        'Yandex 图片 — 封面精确匹配首选',
-        'https://yandex.com/images/search?rpt=imageview&url=$enc',
-        '对商业站封面索引最好, 找一模一样的图'
+        'Bing 以图搜图 — 首选',
+        'https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl%3A$enc',
+        '直连/代理均可用, 国内友好'
       ),
       (
-        'Google Lens — 通用以图搜图',
-        'https://lens.google.com/uploadbyurl?url=$enc',
-        '全网通用, 可能要求登录 Google'
+        'TinEye — 精确匹配老牌',
+        'https://tineye.com/search?url=$enc',
+        '找一模一样的图, 需走代理 (浏览器开着 Clash 即可)'
+      ),
+      (
+        'Yandex — 封面匹配强 (仅直连)',
+        'https://yandex.com/images/search?rpt=imageview&url=$enc',
+        '对代理出口 IP 返回 403, 需切直连环境再用'
       ),
       (
         'SauceNAO — 动画截图/同人图库',

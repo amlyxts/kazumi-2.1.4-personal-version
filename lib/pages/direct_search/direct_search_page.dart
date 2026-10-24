@@ -988,14 +988,18 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   }
 
   /// 浏览器打开 DLsite 搜索 (人眼看封面定位作品, 浏览器可切简中界面)。
+  /// [my修复] fsr 是路径式参数, 必须以 / 闭合后才能接 ?locale 查询串 —
+  /// 直连 ?locale 会返回 200 但 0 结果的残页; 空关键词时 fsr 为 404,
+  /// 改开 maniax 首页。
   Future<void> _openDlsiteBrowserSearch(String keyword) async {
-    final q = keyword.trim().isEmpty
-        ? ''
-        : '/keyword/${Uri.encodeComponent(keyword.trim())}';
-    final url = Uri.parse(
-        'https://www.dlsite.com/maniax/fsr/=$q?locale=zh_CN');
+    final k = keyword.trim();
+    final url = k.isEmpty
+        ? 'https://www.dlsite.com/maniax/?locale=zh_CN'
+        : 'https://www.dlsite.com/maniax/fsr/=/keyword/'
+            '${Uri.encodeComponent(k)}/?locale=zh_CN';
     try {
-      await launchUrl(url, mode: LaunchMode.externalApplication);
+      await launchUrl(Uri.parse(url),
+          mode: LaunchMode.externalApplication);
     } catch (_) {
       KazumiDialog.showToast(message: '无法打开浏览器');
     }

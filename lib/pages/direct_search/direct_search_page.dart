@@ -121,6 +121,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   static String _rememberedGenre = '最新';
   static final Set<String> _rememberedTags = {};
 
+  /// [my新增] 浏览位置记忆 (页码): 页签改按钮导航后切走会销毁重建,
+  /// 静态字段是唯一跨重建存活的状态 — 回到源搜索时从上次页码继续。
+  static int _rememberedPage = 1;
+
   // Bangumi 里番评分匹配 (搜索关键词模式)
   final Map<String, _BangumiRef> _bangumiRefs = {};
 
@@ -149,6 +153,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
     _genre = _rememberedGenre;
     _activeTags.addAll(_rememberedTags);
+    _page = _rememberedPage;
     _loadClaims();
     _collectController.loadCollectibles();
     _collectedIds.addAll(
@@ -557,6 +562,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         _cards = listPage.cards;
         _nextPage = listPage.nextPage;
         _page = page;
+        _rememberedPage = page;
       }
     });
     // 成功后入缓存并后台预取下一页 (fire-and-forget)

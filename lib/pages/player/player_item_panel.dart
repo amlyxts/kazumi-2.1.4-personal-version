@@ -675,10 +675,11 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
               style: const TextStyle(color: Colors.white)),
           items: _speedItems,
         ),
-        _menuButton(
-          child: const Text('字幕', style: TextStyle(color: Colors.white)),
-          items: _subtitleItems,
-        ),
+        if (kSupportsExternalSubtitles)
+          _menuButton(
+            child: const Text('字幕', style: TextStyle(color: Colors.white)),
+            items: _subtitleItems,
+          ),
         _menuButton(
           child: const Icon(Icons.aspect_ratio_rounded, color: Colors.white),
           tooltip: '视频比例',
@@ -865,7 +866,7 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                   );
                 },
                 menuChildren: [
-                  if (compact) ...[
+                  if (compact && kSupportsExternalSubtitles) ...[
                     SubmenuButton(
                         menuChildren: _subtitleItems,
                         child: const Text('字幕')),

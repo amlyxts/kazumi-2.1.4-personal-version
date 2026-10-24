@@ -178,6 +178,10 @@ final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
 /// 只是不展示页签; 追番视图本就过滤 section=1)。
 final bool kSupportsR18Tabs = !Platform.isIOS;
 
+/// [my修改] 播放器外挂字幕/双语同显菜单仅非 iOS 平台 — 字幕功能服务于
+/// 本地文件日语学习场景 (kitsunekko 日字), iOS 端不提供入口。
+final bool kSupportsExternalSubtitles = !Platform.isIOS;
+
 // [my修改] 本地视频在历史记录中使用的虚拟插件名（adapterName），
 // 非空才能让 canRecord 为 true、进度得以持久化。
 const String localVideoPluginName = 'local';

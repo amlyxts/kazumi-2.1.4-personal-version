@@ -107,7 +107,17 @@ class FlareSolverrService {
   /// [my提速] 系统 curl 直取 HTML。CF 按 TLS 指纹拦 dart 栈 (同 cookies/UA/
   /// 代理下 curl 200 / dart 403), Schannel 指纹可过; cookies/UA 取过盾持久化。
   /// 返回 null = 无持久化 cookies / curl 不可用 / 请求失败。
+  /// 带 30s 结果缓存: 播放链路里取集与直链解析抓同一 watch 页, 第二次免网络。
+  static final Map<String, (DateTime, String)> _curlCache = {};
+
   static Future<String?> curlFetch(String url) async {
+    final cached = _curlCache[url];
+    if (cached != null) {
+      if (DateTime.now().difference(cached.$1) < const Duration(seconds: 30)) {
+        return cached.$2;
+      }
+      _curlCache.remove(url);
+    }
     final cookies = GStorage.getSetting(SettingsKeys.flareSolverrCookies);
     if (cookies.isEmpty) return null;
     final root = Platform.environment['SystemRoot'] ?? r'C:\Windows';
@@ -132,6 +142,10 @@ class FlareSolverrService {
         KazumiLogger().w(
             'FlareSolverr: curl fetch null | exit=${r.exitCode} len=${body.length} stderr=${r.stderr.toString().trim()}');
         return null;
+      }
+      _curlCache[url] = (DateTime.now(), body);
+      if (_curlCache.length > 6) {
+        _curlCache.remove(_curlCache.keys.first);
       }
       return body;
     } catch (e) {

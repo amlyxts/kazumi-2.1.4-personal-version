@@ -287,6 +287,15 @@ class Plugin {
   /// [my修改] 经 FlareSolverr 渲染播放页并解析线路; 返回 null = 未配置/失败。
   Future<List<Road>?> queryChaptersViaFlareSolverr(String source) async {
     if (!FlareSolverrService.isConfigured) return null;
+    // [my提速] curl 快速通道优先 (~2s): CF 按 TLS 指纹拦 dart 栈,
+    // Schannel 指纹可过, cookies 取过盾持久化。播放链路里取集与直链解析
+    // 抓同一 watch 页, curlFetch 的短缓存让第二次抓取免网络。
+    // 解析不出线路 (挑战页/cookies 失效) 再落 FS 求解 (同时刷新 cookies)。
+    final curlHtml = await FlareSolverrService.curlFetch(source);
+    if (curlHtml != null) {
+      final roads = parseHarvestedRoads(curlHtml);
+      if (roads != null && roads.isNotEmpty) return roads;
+    }
     final solution = await FlareSolverrService.solve(source);
     if (solution == null) return null;
     try {

@@ -577,6 +577,13 @@ class SettingsKeys {
     3,
     group: SettingGroup.download,
   );
+  // [my新增] 直链视频 (单文件 mp4) 的并行连接数: 文件切 N 段 Range 并行
+  // 下载 (实测 4 连接 ~2.1x)。仅对直链路径生效, m3u8 走分片并发数。
+  static const downloadDirectConnections = SettingKey<int>(
+    'downloadDirectConnections',
+    4,
+    group: SettingGroup.download,
+  );
   static const downloadDanmaku = SettingKey<bool>(
     _SettingBoxKey.downloadDanmaku,
     true,
@@ -748,6 +755,7 @@ class SettingsKeys {
     defaultCollectLayout,
     downloadParallelEpisodes,
     downloadParallelSegments,
+    downloadDirectConnections,
     downloadDanmaku,
     downloadDirectory,
     downloadDirectoryBookmark,

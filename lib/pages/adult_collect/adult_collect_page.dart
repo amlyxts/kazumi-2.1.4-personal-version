@@ -1,14 +1,20 @@
-import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
-import 'package:kazumi/modules/collect/collect_module.dart';
+import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
+import 'package:kazumi/modules/collect/collect_layout.dart';
+import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/pages/collect/collect_library_view.dart';
+import 'package:kazumi/services/storage/storage.dart';
 
-// [my新增] 里番收藏页: 收藏库 section=1 分区的独立视图。
-// 数据与追番同库 (WebDAV 同步随库走), 但永不上传 Bangumi; 条目来源为
-// 源直连浏览页收藏 (自动入区) 或从追番页导入 (下方按钮)。
+// [my重写] 里番收藏页 — 与追番页同构 (复用 CollectLibraryView 全套:
+// 分类 Tab/搜索/排序/双布局/卡片交互), 数据源只喂 section==1。
+// 布局记忆独立 (adultCollectLayout); 卡片点击: 有 bgm 匹配开条目页,
+// 未匹配直接播放; 长按菜单含"移回追番"。
 class AdultCollectPage extends StatefulWidget {
   const AdultCollectPage({super.key});
 
@@ -18,21 +24,36 @@ class AdultCollectPage extends StatefulWidget {
 
 class _AdultCollectPageState extends State<AdultCollectPage> {
   final CollectController _collectController = inject<CollectController>();
+  late CollectLayout _layout;
 
   @override
   void initState() {
     super.initState();
     _collectController.loadCollectibles();
+    _layout = CollectLayout.fromValue(
+        GStorage.getSetting(SettingsKeys.adultCollectLayout));
   }
 
-  List<CollectedBangumi> get _items => _collectController.collectibles
-      .where((c) => c.section == 1)
-      .toList()
-    ..sort((a, b) => b.time.compareTo(a.time));
+  void _changeLayout(CollectLayout layout) {
+    setState(() => _layout = layout);
+    GStorage.putSetting(SettingsKeys.adultCollectLayout, layout.name);
+  }
+
+  /// 卡片点击: 匹配 bgm (真实条目 id, 与追番条目 id 空间一致) 开条目页,
+  /// 未匹配直接查本条目集数并弹出播放选择 (里番的"打开"就是看)。
+  void _open(CollectedBangumi entry) {
+    final item = entry.bangumiItem;
+    final isRealBgmEntry = _collectController.collectibles
+        .any((c) => c.bangumiItem.id == item.id && c.section != 1);
+    if (isRealBgmEntry) {
+      if (context.mounted) context.pushNamed('/info/', arguments: item);
+      return;
+    }
+    KazumiDialog.showToast(message: '未匹配 Bangumi 条目, 请从源直连浏览页播放');
+  }
 
   @override
   Widget build(BuildContext context) {
-    final items = _items;
     return Scaffold(
       appBar: AppBar(
         title: const Text('里番收藏'),
@@ -44,90 +65,51 @@ class _AdultCollectPageState extends State<AdultCollectPage> {
           ),
         ],
       ),
-      body: items.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.folder_special_outlined,
-                      size: 48,
-                      color: Theme.of(context).colorScheme.outline),
-                  const SizedBox(height: 12),
-                  const Text('还没有里番区收藏', style: TextStyle(fontSize: 14)),
-                  const SizedBox(height: 4),
-                  Text(
-                    '在源直连浏览页收藏会自动入区; 也可用右上按钮从追番导入',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.outline),
-                  ),
-                ],
-              ),
-            )
-          : ListView.builder(
-              itemCount: items.length,
-              itemBuilder: (context, index) {
-                final entry = items[index];
-                final item = entry.bangumiItem;
-                final type = CollectType.fromValue(entry.type);
-                return ListTile(
-                  leading: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: SizedBox(
-                      width: 64,
-                      height: 40,
-                      child: (item.images['large'] ?? '').isNotEmpty
-                          ? CachedNetworkImage(
-                              imageUrl: item.images['large'] ?? '',
-                              fit: BoxFit.cover,
-                              errorWidget: (_, __, ___) => Container(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest,
-                              ),
-                            )
-                          : Container(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .surfaceContainerHighest,
-                            ),
-                    ),
-                  ),
-                  title: Text(
-                    item.nameCn.isNotEmpty ? item.nameCn : item.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                  subtitle: Text(
-                    '${type.label} · ${entry.time.month}/${entry.time.day}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (v) async {
-                      if (v == 'move') {
-                        await _collectController.setCollectSection(
-                            item.id, 0);
-                        KazumiDialog.showToast(message: '已移回追番 (表番区)');
-                      } else if (v == 'delete') {
-                        await _collectController
-                            .deleteCollectLocalOnly(item);
-                        KazumiDialog.showToast(message: '已取消收藏');
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                          value: 'move', child: Text('移回追番 (表番区)')),
-                      PopupMenuItem(value: 'delete', child: Text('取消收藏')),
-                    ],
-                  ),
-                );
-              },
-            ),
+      body: SafeArea(
+        top: false,
+        bottom: false,
+        child: CollectLibraryView(
+          // 只喂里番区条目 (section 过滤在页面层, 与追番页对称)
+          entries: _collectController.collectibles
+              .where((c) => c.section == 1)
+              .toList(),
+          showRating: GStorage.getSetting(SettingsKeys.showRating),
+          layout: _layout,
+          onLayoutChanged: _changeLayout,
+          canEdit: (_) => true,
+          onOpen: (item) {
+            final entry = _collectController.collectibles.firstWhere(
+              (c) => c.bangumiItem.id == item.id,
+              orElse: () => CollectedBangumi(item, DateTime.now(), 0),
+            );
+            _open(entry);
+          },
+          onChangeType: (item, type) => unawaited(_changeType(item, type)),
+          isAdultSection: true,
+          onMoveToMain: (item) async {
+            await _collectController.setCollectSection(item.id, 0);
+            if (mounted) KazumiDialog.showToast(message: '已移回追番 (表番区)');
+          },
+        ),
+      ),
     );
   }
 
-  /// 从追番 (表番区) 批量导入: 把旧收藏或误入的条目迁入里番区
+  Future<void> _changeType(BangumiItem item, CollectType type) async {
+    if (type == CollectType.none) {
+      await _collectController.deleteCollectLocalOnly(item);
+      return;
+    }
+    try {
+      // 里番区改类型: 纯本地 (section 保持 1, 不触发 Bangumi 同步)
+      await _collectController.addCollectLocalOnly(item,
+          type: type.value, section: 1);
+    } catch (_) {
+      KazumiDialog.showToast(message: '修改收藏状态失败，请稍后重试');
+    }
+  }
+
+  /// 从追番 (表番区) 批量导入
   Future<void> _showImportPicker() async {
     final candidates = _collectController.collectibles
         .where((c) => c.section != 1)
@@ -159,10 +141,9 @@ class _AdultCollectPageState extends State<AdultCollectPage> {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 13),
                     ),
-                    onChanged: (v) => setDialogState(() =>
-                        v == true
-                            ? selected.add(c.bangumiItem.id)
-                            : selected.remove(c.bangumiItem.id)),
+                    onChanged: (v) => setDialogState(() => v == true
+                        ? selected.add(c.bangumiItem.id)
+                        : selected.remove(c.bangumiItem.id)),
                   ),
               ],
             ),

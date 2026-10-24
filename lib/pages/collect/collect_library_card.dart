@@ -8,9 +8,13 @@ class _CollectPosterCard extends StatelessWidget {
     required this.showStatus,
     required this.onOpen,
     required this.onChangeType,
+    this.isAdultSection = false,
+    this.onMoveToMain,
   });
 
   final CollectedBangumi entry;
+  final bool isAdultSection;
+  final void Function(BangumiItem)? onMoveToMain;
   final bool showRating;
   final bool showStatus;
   final VoidCallback onOpen;
@@ -116,7 +120,12 @@ class _CollectPosterCard extends StatelessWidget {
                 if (showStatus) type.label,
               ].join(' · ')),
       );
-      final menu = _CollectEntryMenu(entry: entry, onChanged: onChangeType);
+      final menu = _CollectEntryMenu(
+        entry: entry,
+        onChanged: onChangeType,
+        isAdultSection: isAdultSection,
+        onMoveToMain: onMoveToMain,
+      );
       final footer = compact
           ? Padding(
               padding: const EdgeInsets.only(top: 8, bottom: 4),
@@ -218,12 +227,16 @@ class _CollectListTile extends StatelessWidget {
     required this.showRating,
     required this.onOpen,
     required this.onChangeType,
+    this.isAdultSection = false,
+    this.onMoveToMain,
   });
 
   final CollectedBangumi entry;
   final bool showRating;
   final VoidCallback onOpen;
   final ValueChanged<CollectType>? onChangeType;
+  final bool isAdultSection;
+  final void Function(BangumiItem)? onMoveToMain;
 
   @override
   Widget build(BuildContext context) {
@@ -315,6 +328,8 @@ class _CollectListTile extends StatelessWidget {
                         entry: entry,
                         onChanged: onChangeType,
                         showStatusLabel: true,
+                        isAdultSection: isAdultSection,
+                        onMoveToMain: onMoveToMain,
                       ),
                     ],
                   ),
@@ -357,10 +372,16 @@ class _CollectEntryMenu extends StatelessWidget {
     required this.entry,
     required this.onChanged,
     this.showStatusLabel = false,
+    this.isAdultSection = false,
+    this.onMoveToMain,
   });
   final CollectedBangumi entry;
   final ValueChanged<CollectType>? onChanged;
   final bool showStatusLabel;
+
+  /// [my新增] 里番区: 菜单含"移回追番" (section 1→0)
+  final bool isAdultSection;
+  final void Function(BangumiItem)? onMoveToMain;
 
   @override
   Widget build(BuildContext context) {
@@ -385,6 +406,11 @@ class _CollectEntryMenu extends StatelessWidget {
             label: status.label,
           ),
         const Divider(indent: 16, endIndent: 16),
+        if (isAdultSection && onMoveToMain != null)
+          KazumiMenuItem(
+            onPressed: () => onMoveToMain!(entry.bangumiItem),
+            label: '移回追番 (表番区)',
+          ),
         KazumiMenuItem(
           onPressed:
               onChanged == null ? null : () => onChanged!(CollectType.none),

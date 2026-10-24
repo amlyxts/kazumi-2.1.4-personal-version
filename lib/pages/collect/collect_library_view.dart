@@ -31,6 +31,8 @@ class CollectLibraryView extends StatefulWidget {
     required this.canEdit,
     required this.layout,
     required this.onLayoutChanged,
+    this.isAdultSection = false,
+    this.onMoveToMain,
   });
 
   final List<CollectedBangumi> entries;
@@ -40,6 +42,12 @@ class CollectLibraryView extends StatefulWidget {
   final bool Function(BangumiItem) canEdit;
   final CollectLayout layout;
   final ValueChanged<CollectLayout> onLayoutChanged;
+
+  /// [my新增] 里番区标记: 卡片菜单显示"移回追番"而非仅取消收藏
+  final bool isAdultSection;
+
+  /// [my新增] 移回表番区回调 (isAdultSection 时使用)
+  final void Function(BangumiItem)? onMoveToMain;
 
   @override
   State<CollectLibraryView> createState() => _CollectLibraryViewState();
@@ -366,6 +374,8 @@ class _CollectLibraryViewState extends State<CollectLibraryView>
             showRating: widget.showRating,
             onOpen: () => widget.onOpen(entries[index].bangumiItem),
             onChangeType: _changeTypeFor(entries[index]),
+            isAdultSection: widget.isAdultSection,
+            onMoveToMain: widget.onMoveToMain,
           ),
         );
 
@@ -430,6 +440,8 @@ class _CollectLibraryViewState extends State<CollectLibraryView>
         showStatus: type == null,
         onOpen: () => widget.onOpen(entries[index].bangumiItem),
         onChangeType: _changeTypeFor(entries[index]),
+        isAdultSection: widget.isAdultSection,
+        onMoveToMain: widget.onMoveToMain,
       ),
     );
   }

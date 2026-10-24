@@ -138,7 +138,10 @@ class _CollectPageState extends State<CollectPage> with KazumiDialogOwner {
         bottom: false,
         child: Observer(
           builder: (context) => CollectLibraryView(
-            entries: collectController.collectibles.toList(),
+            // [my修改] section 过滤上移到页面层: 追番 (表番) 只喂 section!=1
+            entries: collectController.collectibles
+                .where((c) => c.section != 1)
+                .toList(),
             showRating: GStorage.getSetting(SettingsKeys.showRating),
             layout: _layout,
             onLayoutChanged: _changeLayout,

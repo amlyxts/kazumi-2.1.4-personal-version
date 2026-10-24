@@ -513,6 +513,12 @@ class SettingsKeys {
     'list',
     group: SettingGroup.interface,
   );
+  // [my新增] 里番收藏页布局记忆 (与追番页独立)
+  static const adultCollectLayout = SettingKey<String>(
+    'adultCollectLayout',
+    'cards',
+    group: SettingGroup.collect,
+  );
   static const downloadParallelEpisodes = SettingKey<int>(
     _SettingBoxKey.downloadParallelEpisodes,
     2,
@@ -777,6 +783,7 @@ class SettingsKeys {
     proxyTestUrl,
     showRating,
     defaultCollectLayout,
+    adultCollectLayout,
     downloadParallelEpisodes,
     downloadParallelSegments,
     downloadDirectConnections,

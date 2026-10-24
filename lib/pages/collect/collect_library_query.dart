@@ -20,10 +20,10 @@ class CollectLibraryQuery {
   static List<CollectedBangumi> _match(
       Iterable<CollectedBangumi> items, String query) {
     final terms = query.trim().toLowerCase().split(RegExp(r'\s+'));
+    // [my修改] section 过滤上移到页面层 (追番页滤里番/里番页只喂里番),
+    // 本查询只做标题匹配 — CollectLibraryView 从此数据来源无关。
     return items.where((entry) {
       if (!CollectType.fromValue(entry.type).isCollected) return false;
-      // [my修改] 里番区条目不在追番 (表番) 视图显示, 见里番收藏页
-      if (entry.section == 1) return false;
       final item = entry.bangumiItem;
       final names =
           [item.nameCn, item.name, ...item.alias].join('\n').toLowerCase();

@@ -1055,23 +1055,66 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   }
 
   /// 浏览器打开 DLsite 检索 (人眼看封面定位作品, 简中界面)。
-  /// [my修复] fsr 路径参数须以 / 闭合后再接 ?locale 查询串 (直接拼接
-  /// 返回 200 但 0 结果的残页)。中文标题在 DLsite 恒 0 结果 (语言断层,
-  /// 实测) — 仅日文关键词 (含假名, 如 bgm 桥自动填入) 走关键词搜索,
-  /// 否则开趋势排行封面墙供人眼浏览定位。
+  /// [my修改] 改为入口选择: 商业动画混排但贴近里番 (PRO 区), 同人区
+  /// 热门排行, 或日文关键词直搜。中文标题恒 0 结果 (语言断层, 实测),
+  /// 关键词项仅在含假名时预填生效。
   Future<void> _openDlsiteBrowserSearch(String keyword) async {
     final k = keyword.trim();
     final hasKana = RegExp(r'[\u3040-\u30ff]').hasMatch(k);
-    final url = k.isNotEmpty && hasKana
-        ? 'https://www.dlsite.com/maniax/fsr/=/keyword/'
-            '${Uri.encodeComponent(k)}/?locale=zh_CN'
-        : 'https://www.dlsite.com/maniax/fsr/=/order/trend/?locale=zh_CN';
-    try {
-      await launchUrl(Uri.parse(url),
-          mode: LaunchMode.externalApplication);
-    } catch (_) {
-      KazumiDialog.showToast(message: '无法打开浏览器');
-    }
+    final kwUrl = 'https://www.dlsite.com/maniax/fsr/=/keyword/'
+        '${Uri.encodeComponent(k)}/?locale=zh_CN';
+    final targets = <(String, String, String)>[
+      (
+        '商业动画区 (PRO) — 里番主战场',
+        'https://www.dlsite.com/pro/fsr/=/work_type/ANM/?locale=zh_CN',
+        '厂商发行动画 (与同人混排, 但最贴近里番)'
+      ),
+      (
+        '同人区热门排行',
+        'https://www.dlsite.com/maniax/fsr/=/order/trend/?locale=zh_CN',
+        '同人/Motion Anime 主场'
+      ),
+      if (k.isNotEmpty && hasKana)
+        (
+          '关键词搜索: $k',
+          kwUrl,
+          '日文关键词直搜 (简中界面)'
+        ),
+    ];
+    await KazumiDialog.show(
+      builder: (context) => AlertDialog(
+        title: const Text('DLsite 浏览器搜索 — 选择入口',
+            style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final (name, url, hint) in targets)
+              ListTile(
+                dense: true,
+                title: Text(name,
+                    style: const TextStyle(fontSize: 13),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                subtitle: Text(hint,
+                    style: const TextStyle(fontSize: 11)),
+                onTap: () {
+                  KazumiDialog.dismiss();
+                  launchUrl(Uri.parse(url),
+                      mode: LaunchMode.externalApplication);
+                },
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: KazumiDialog.dismiss,
+            child: Text('关闭',
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.outline)),
+          ),
+        ],
+      ),
+    );
   }
 
   /// bgm 条目日文名 (DLsite 检索桥): DLsite 为日文站, 中文标题恒 0 结果;

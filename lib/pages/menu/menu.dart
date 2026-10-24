@@ -158,14 +158,7 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             icon: Icon(Icons.favorite_outlined),
             label: '追番',
           ),
-          // [my修改] 源直连搜索页签 (追番下方; iOS 不提供)
-          if (kSupportsR18Tabs)
-            const NavigationDestination(
-              selectedIcon: Icon(Icons.travel_explore),
-              icon: Icon(Icons.travel_explore_outlined),
-              label: '源搜索',
-            ),
-          // [my修改] 里番收藏页签 (源搜索下方; iOS 不提供)
+          // [my修改] 里番收藏页签 (追番下方; iOS 不提供)
           if (kSupportsR18Tabs)
             const NavigationDestination(
               selectedIcon: Icon(Icons.folder_special),
@@ -178,6 +171,13 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
               selectedIcon: Icon(Icons.video_library),
               icon: Icon(Icons.video_library_outlined),
               label: '本地视频',
+            ),
+          // [my修改] 源直连搜索页签 (iOS 不提供; 底栏保留页签形态)
+          if (kSupportsR18Tabs)
+            const NavigationDestination(
+              selectedIcon: Icon(Icons.travel_explore),
+              icon: Icon(Icons.travel_explore_outlined),
+              label: '源搜索',
             ),
           NavigationDestination(
             selectedIcon: Icon(Icons.settings),
@@ -204,11 +204,27 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             child: NavigationRail(
               backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
               groupAlignment: 1,
-              leading: FloatingActionButton(
-                elevation: 0,
-                heroTag: null,
-                onPressed: () => context.pushNamed('/search/'),
-                child: const Icon(Icons.search),
+              // [my修改] 左上角搜索按钮下方加源搜索按钮 (用户要求:
+              // 源搜索不再是页签, 挂在搜索按钮下面)
+              leading: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  FloatingActionButton(
+                    elevation: 0,
+                    heroTag: null,
+                    onPressed: () => context.pushNamed('/search/'),
+                    child: const Icon(Icons.search),
+                  ),
+                  const SizedBox(height: 12),
+                  if (kSupportsR18Tabs)
+                    FloatingActionButton(
+                      elevation: 0,
+                      heroTag: null,
+                      onPressed: () => _selectDestination(
+                          menu.indexForPath('/direct_search')),
+                      child: const Icon(Icons.travel_explore),
+                    ),
+                ],
               ),
               labelType: NavigationRailLabelType.selected,
               // [my修改] 本地视频页签仅桌面端, 列表去 const
@@ -228,13 +244,6 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                   icon: Icon(Icons.favorite_border),
                   label: Text('追番'),
                 ),
-                // [my修改] 源直连搜索页签 (追番下方; iOS 不提供)
-                if (kSupportsR18Tabs)
-                  const NavigationRailDestination(
-                    selectedIcon: Icon(Icons.travel_explore),
-                    icon: Icon(Icons.travel_explore_outlined),
-                    label: Text('源搜索'),
-                  ),
                 // [my修改] 里番收藏页签 (源搜索下方; iOS 不提供)
                 if (kSupportsR18Tabs)
                   const NavigationRailDestination(

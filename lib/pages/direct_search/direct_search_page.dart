@@ -493,6 +493,18 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
+  /// [my新增] 双向预取: N+1 与 N-1 (往回翻也秒开)。
+  /// N-1 用当前已知页码直接构造 (页码存在即合法); N+1 需 _nextPage 确认
+  /// 有下一页 (末页置灰逻辑同款)。
+  void _prefetchNeighbors(int page) {
+    if (_nextPage != null && _nextPage! > page) {
+      _prefetch(_listUrlForPage(page + 1));
+    }
+    if (page > 1) {
+      _prefetch(_listUrlForPage(page - 1));
+    }
+  }
+
   /// SWR: 缓存命中后的后台刷新 — 拉新版本, 用户仍在本页才静默替换
   Future<void> _refreshInBackground(String url) async {
     if (_prefetchInflight.contains(url)) return;
@@ -512,14 +524,17 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
-  /// 悬停预取: 桌面端鼠标扫过分区条 = 意图信号, 提前拉该分区第 1 页。
-  /// 200ms 防抖: 快速扫过整条只触发停下的那个, 不为路过者付请求。
+  /// 悬停预取: 桌面端鼠标扫过分区条 = 意图信号, 提前拉该分区第 1、2 页
+  /// (浏览分类的常见深度, 深度+2)。200ms 防抖: 快速扫过整条只触发停下
+  /// 的那个, 不为路过者付请求。
   Timer? _hoverDebounce;
   void _hoverPrefetchGenre(String genre) {
     _hoverDebounce?.cancel();
     _hoverDebounce = Timer(const Duration(milliseconds: 200), () {
       if (genre == _genre || _loading || _siteBase.isEmpty) return;
-      _prefetch(_urlForGenre(genre));
+      final base = _urlForGenre(genre);
+      _prefetch(base);
+      _prefetch('$base&page=2');
     });
   }
 
@@ -542,10 +557,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         _page = page;
       });
       _refreshInBackground(url);
-      // 后台顺带预取下一页
-      if (_nextPage != null && _nextPage! > _page) {
-        _prefetch(_listUrlForPage(page + 1));
-      }
+      // 后台顺带双向预取 (下一页 + 上一页)
+      _prefetchNeighbors(page);
       return;
     }
     setState(() {
@@ -571,12 +584,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         _rememberedPage = page;
       }
     });
-    // 成功后入缓存并后台预取下一页 (fire-and-forget)
+    // 成功后入缓存并后台双向预取 (fire-and-forget)
     if (listPage != null && listPage.cards.isNotEmpty) {
       _cachePut(url, listPage);
-      if (_nextPage != null && _nextPage! > _page) {
-        _prefetch(_listUrlForPage(page + 1));
-      }
+      _prefetchNeighbors(page);
     }
   }
 

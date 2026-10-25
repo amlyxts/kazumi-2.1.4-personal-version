@@ -1058,10 +1058,21 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                                     label: Text(t,
                                         style: const TextStyle(fontSize: 12)),
                                     selected: selected.contains(t),
-                                    onSelected: (_) => setDialogState(() =>
-                                        selected.contains(t)
-                                            ? selected.remove(t)
-                                            : selected.add(t)),
+                                    onSelected: (_) {
+                                      setDialogState(() =>
+                                          selected.contains(t)
+                                              ? selected.remove(t)
+                                              : selected.add(t));
+                                      // [my修复] 即时应用: 点选即刻生效
+                                      // (原需再点確定才生效)
+                                      _activeTags
+                                        ..clear()
+                                        ..addAll(selected);
+                                      _rememberedTags
+                                        ..clear()
+                                        ..addAll(selected);
+                                      _loadList(reset: true);
+                                    },
                                   ),
                               ],
                             ),
@@ -1085,7 +1096,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ),
               TextButton(
                 onPressed: KazumiDialog.dismiss,
-                child: const Text('確定'),
+                child: const Text('關閉'),
               ),
             ],
           );
@@ -1212,6 +1223,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                         label: Text(t, style: const TextStyle(fontSize: 12)),
                         onDeleted: () {
                           setState(() => _activeTags.remove(t));
+                          // [my修复] 同步静态记忆 — 原只删 _activeTags,
+                          // 切走再回被 _rememberedTags 灌回
+                          _rememberedTags.remove(t);
                           _loadList(reset: true);
                         },
                       ),

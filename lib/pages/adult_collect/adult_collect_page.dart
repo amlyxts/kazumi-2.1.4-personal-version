@@ -8,9 +8,13 @@ import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/modules/collect/collect_layout.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/pages/video/video_playback_args.dart';
+import 'package:kazumi/plugins/plugins.dart';
+import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/pages/collect/collect_library_view.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/utils/device.dart';
 
 // [my重写] 里番收藏页 — 与追番页同构 (复用 CollectLibraryView 全套:
 // 分类 Tab/搜索/排序/双布局/卡片交互), 数据源只喂 section==1。
@@ -23,7 +27,8 @@ class AdultCollectPage extends StatefulWidget {
   State<AdultCollectPage> createState() => _AdultCollectPageState();
 }
 
-class _AdultCollectPageState extends State<AdultCollectPage> {
+class _AdultCollectPageState extends State<AdultCollectPage>
+    with KazumiDialogOwner {
   final CollectController _collectController = inject<CollectController>();
   late CollectLayout _layout;
 
@@ -46,9 +51,10 @@ class _AdultCollectPageState extends State<AdultCollectPage> {
     }();
   }
 
-  /// 卡片点击: 匹配 bgm (真实条目 id, 与追番条目 id 空间一致) 开条目页,
-  /// 未匹配直接查本条目集数并弹出播放选择 (里番的"打开"就是看)。
-  void _open(CollectedBangumi entry) {
+  /// 卡片点击: 匹配 bgm 开条目页 (同追番); 未匹配凭收藏内嵌的播放地址
+  /// (BangumiItem.info = 播放页 URL, 收藏时随库落 WebDAV) 直接恢复播放 —
+  /// 跨设备收藏也能从收藏页一键播。
+  Future<void> _open(CollectedBangumi entry) async {
     final item = entry.bangumiItem;
     final isRealBgmEntry = _collectController.collectibles
         .any((c) => c.bangumiItem.id == item.id && c.section != 1);
@@ -56,7 +62,52 @@ class _AdultCollectPageState extends State<AdultCollectPage> {
       if (context.mounted) context.pushNamed('/info/', arguments: item);
       return;
     }
-    KazumiDialog.showToast(message: '未匹配 Bangumi 条目, 请从源直连浏览页播放');
+    final src = item.info.trim();
+    if (src.isEmpty) {
+      // 旧收藏 (info 落库前收的) 或跨设备来的: 指引用户去源直连页重收
+      KazumiDialog.showToast(message: '此收藏缺播放地址, 请从源直连浏览页重新收藏');
+      return;
+    }
+    final plugins = inject<PluginsController>().pluginList;
+    final siteHost = Uri.tryParse(src)?.host ?? '';
+    Plugin? plugin;
+    for (final p in plugins) {
+      if ((Uri.tryParse(p.baseUrl)?.host ?? '') == siteHost) {
+        plugin = p;
+        break;
+      }
+    }
+    if (plugin == null) {
+      KazumiDialog.showToast(message: '未找到与收藏站点同域的规则源');
+      return;
+    }
+    // 收藏页内直接跑播放任务 (取线路 → 播放页), 与源搜索同款交互
+    if (dialogs.isRunning) return;
+    await dialogs.run((task) async {
+      final roads = await task.loading(
+        message: '正在获取播放列表',
+        barrierDismissible: isDesktop(),
+        action: () => plugin!.queryChapterRoads(src),
+      );
+      if (roads.isEmpty) {
+        throw Exception('未获取到播放线路');
+      }
+      if (mounted) {
+        task.withContext((context) => context.pushNamed(
+              '/video/',
+              arguments: OnlineVideoPlaybackArgs(
+                bangumiItem: item,
+                plugin: plugin!,
+                title: item.nameCn.isNotEmpty ? item.nameCn : item.name,
+                src: src,
+                roads: roads,
+              ),
+            ));
+      }
+    }, onError: (error, stackTrace) {
+      KazumiLogger().w('AdultCollect: play failed', error: error);
+      KazumiDialog.showToast(message: '获取播放列表失败，请重试');
+    });
   }
 
   @override

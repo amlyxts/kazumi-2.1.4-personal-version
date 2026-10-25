@@ -210,7 +210,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       ratingScore: ref?.score ?? 0.0,
       votes: 0,
       votesCount: [],
-      info: '',
+      // [my新增] 直连条目的播放地址随收藏落库 (WebDAV), 里番收藏页
+      // 点击卡片时凭此直接恢复播放 — 无需 bgm 匹配
+      info: card.href,
     );
   }
 
@@ -967,15 +969,20 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   // ====== 播放 (卡片 → 取集 → 播放页) ======
 
-  Future<void> _play(_BrowseCard card) async {
-    final plugin = _selectedPlugin;
-    if (plugin == null || dialogs.isRunning) return;
-    final fabricated = _fabricatedItem(card);
+  /// [my新增] 公共播放入口 (源搜索卡片与里番收藏页共用):
+  /// 取线路 → 跳播放页。src = 播放页地址。
+  Future<void> playViaPlugin({
+    required Plugin plugin,
+    required String title,
+    required String src,
+    required BangumiItem item,
+  }) async {
+    if (dialogs.isRunning) return;
     await dialogs.run((task) async {
       final roads = await task.loading(
         message: '正在获取播放列表',
         barrierDismissible: isDesktop(),
-        action: () => plugin.queryChapterRoads(card.href),
+        action: () => plugin.queryChapterRoads(src),
       );
       if (roads.isEmpty) {
         throw Exception('未获取到播放线路');
@@ -984,10 +991,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         task.withContext((context) => context.pushNamed(
               '/video/',
               arguments: OnlineVideoPlaybackArgs(
-                bangumiItem: fabricated,
+                bangumiItem: item,
                 plugin: plugin,
-                title: card.title,
-                src: card.href,
+                title: title,
+                src: src,
                 roads: roads,
               ),
             ));
@@ -996,6 +1003,18 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       KazumiLogger().w('DirectSearch: play failed', error: error);
       KazumiDialog.showToast(message: '获取播放列表失败，请重试');
     });
+  }
+
+  /// 源搜索卡片播放入口 (保留旧签名, 组装后委托公共方法)
+  Future<void> _play(_BrowseCard card) async {
+    final plugin = _selectedPlugin;
+    if (plugin == null) return;
+    await playViaPlugin(
+      plugin: plugin,
+      title: card.title,
+      src: card.href,
+      item: _fabricatedItem(card),
+    );
   }
 
   // ====== 标签多选弹窗 ======

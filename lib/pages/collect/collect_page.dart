@@ -66,6 +66,10 @@ class _CollectPageState extends State<CollectPage> with KazumiDialogOwner {
   void _changeLayout(CollectLayout layout) {
     if (_layout == layout) return;
     setState(() => _layout = layout);
+    // [my修改] 按钮切换即持久化 — 上游设计为"仅设置页修改才落盘",
+    // 追番页按钮只是临时布局 (切页签/重启即丢), 与里番页行为不一致。
+    unawaited(GStorage.putSetting(
+        SettingsKeys.defaultCollectLayout, layout.name));
   }
 
   Future<void> _changeType(BangumiItem item, CollectType type) async {

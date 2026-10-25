@@ -9,6 +9,7 @@ import 'package:kazumi/modules/collect/collect_layout.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/pages/collect/collect_library_view.dart';
+import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 // [my重写] 里番收藏页 — 与追番页同构 (复用 CollectLibraryView 全套:
@@ -36,7 +37,13 @@ class _AdultCollectPageState extends State<AdultCollectPage> {
 
   void _changeLayout(CollectLayout layout) {
     setState(() => _layout = layout);
-    GStorage.putSetting(SettingsKeys.adultCollectLayout, layout.name);
+    // [my修复] putSetting 是异步 Future — 未 await 时页面销毁可能中断
+    // 落盘; 补 await + 日志 (布局记忆丢失排查)
+    () async {
+      await GStorage.putSetting(SettingsKeys.adultCollectLayout, layout.name);
+      KazumiLogger().i(
+          'AdultCollect: layout saved = ${layout.name}');
+    }();
   }
 
   /// 卡片点击: 匹配 bgm (真实条目 id, 与追番条目 id 空间一致) 开条目页,

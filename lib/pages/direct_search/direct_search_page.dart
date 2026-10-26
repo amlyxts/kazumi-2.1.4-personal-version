@@ -10,6 +10,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/dialog/dialog_task.dart';
@@ -39,10 +40,18 @@ class _BrowseCard {
 }
 
 class _ListPage {
-  _ListPage({required this.cards, required this.currentPage, this.nextPage});
+  _ListPage({
+    required this.cards,
+    required this.currentPage,
+    this.nextPage,
+    this.lastPage,
+  });
   final List<_BrowseCard> cards;
   final int currentPage;
   final int? nextPage;
+
+  /// [my新增] 站点翻页条里的末页码 — "第 N / M 页"显示与跳转范围
+  final int? lastPage;
 }
 
 class _BangumiRef {
@@ -104,6 +113,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   final Set<String> _activeTags = {};
   int _page = 1;
   int? _nextPage;
+
+  /// [my新增] 站点末页码 (跳转范围显示)
+  int? _lastPage;
   List<_BrowseCard> _cards = [];
   bool _loading = false;
   String? _error;
@@ -421,7 +433,15 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       if (pageLinks.isNotEmpty) next = pageLinks.reduce((a, b) => a > b ? a : b);
       final current = RegExp(r'[?&]page=(\d+)').firstMatch(_lastFetchedUrl);
       final cur = current != null ? int.tryParse(current.group(1)!) ?? 1 : 1;
-      return _ListPage(cards: cards, currentPage: cur, nextPage: next);
+      // [my新增] 末页码 = 翻页条最大页码 (站点翻页条恒含末页链接)
+      final last = pageLinks.isNotEmpty
+          ? pageLinks.reduce((a, b) => a > b ? a : b)
+          : null;
+      return _ListPage(
+          cards: cards,
+          currentPage: cur,
+          nextPage: next,
+          lastPage: last);
     } catch (e) {
       KazumiLogger().w('DirectSearch: parse cards failed: $e');
       return null;
@@ -519,6 +539,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       setState(() {
         _cards = fresh.cards;
         _nextPage = fresh.nextPage;
+        _lastPage = fresh.lastPage ?? _lastPage;
       });
     } catch (_) {
     } finally {
@@ -556,6 +577,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         _error = null;
         _cards = cached.cards;
         _nextPage = cached.nextPage;
+        _lastPage = cached.lastPage ?? _lastPage;
         _page = page;
       });
       _refreshInBackground(url);
@@ -582,6 +604,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       } else {
         _cards = listPage.cards;
         _nextPage = listPage.nextPage;
+        _lastPage = listPage.lastPage ?? _lastPage;
         _page = page;
         _rememberedPage = page;
       }
@@ -596,6 +619,62 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   Future<void> _nextPageLoad() => _loadList(reset: false, page: _page + 1);
   Future<void> _prevPageLoad() =>
       _page > 1 ? _loadList(reset: false, page: _page - 1) : Future.value();
+
+  /// [my新增] 页码跳转: 输入目标页 (范围 1..lastPage), 直达加载。
+  /// KazumiDialog.show<int> 的 Future 返回弹窗带回的页码。
+  Future<void> _jumpToPage() async {
+    final last = _lastPage ?? 9999;
+    final controller = TextEditingController();
+    final page = await KazumiDialog.show<int>(
+      clickMaskDismiss: true,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('跳转到页码', style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('当前第 $_page 页 / 共 $last 页',
+                style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(
+                hintText: '1 - $last',
+                prefixIcon: const Icon(Icons.tag_rounded),
+              ),
+              onSubmitted: (v) =>
+                  KazumiDialog.dismiss(popWith: int.tryParse(v)),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: KazumiDialog.dismiss,
+            child: Text('取消',
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.outline)),
+          ),
+          TextButton(
+            onPressed: () => KazumiDialog.dismiss(
+                popWith: int.tryParse(controller.text)),
+            child: const Text('跳转'),
+          ),
+        ],
+      ),
+    );
+    if (page != null) {
+      await _gotoPage(page);
+    }
+  }
+
+  /// [my新增] 直达指定页 (校验范围)
+  Future<void> _gotoPage(int page) async {
+    final last = _lastPage ?? page;
+    if (page < 1 || page > last || page == _page) return;
+    await _loadList(reset: false, page: page);
+  }
 
   // ====== 搜索模式 (站内关键词, 走同一卡片解析) ======
 
@@ -1400,7 +1479,26 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                     onPressed: _page > 1 ? _prevPageLoad : null,
                     icon: const Icon(Icons.chevron_left),
                   ),
-                  Text('第 $_page 页'),
+                  // [my新增] 点击弹页码跳转 (显示末页码)
+                  InkWell(
+                    onTap: _lastPage != null ? _jumpToPage : null,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      child: Text(
+                        _lastPage != null
+                            ? '第 $_page / $_lastPage 页'
+                            : '第 $_page 页',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: _lastPage != null
+                              ? Theme.of(context).colorScheme.primary
+                              : null,
+                        ),
+                      ),
+                    ),
+                  ),
                   IconButton(
                     // _nextPage = 站点翻页条里的最大页码 (恒含末页) — 等于当前页
                     // 即已到末页, 置灰; 否则会点进空页使整条取数链路报错。

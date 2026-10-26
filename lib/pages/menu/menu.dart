@@ -5,7 +5,6 @@ import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
 import 'package:kazumi/navigation.dart';
 import 'package:kazumi/pages/menu/route_visibility.dart';
-import 'package:kazumi/pages/router.dart';
 import 'package:kazumi/utils/constants.dart';
 
 class ScaffoldMenu extends StatefulWidget {
@@ -17,26 +16,82 @@ class ScaffoldMenu extends StatefulWidget {
   State<ScaffoldMenu> createState() => _ScaffoldMenu();
 }
 
+/// 页签规格 — [my重构] 单一事实源: 底栏 7 项 (含源搜索页签, 移动端),
+/// 桌面侧栏 = 底栏去掉源搜索 (侧栏里源搜索是搜索按钮下方的独立按钮)。
+/// 导航一律按路径 (不再用位置索引 — 三表位置耦合是历次错位的根源)。
+class _TabSpec {
+  const _TabSpec(this.path, this.icon, this.selectedIcon, this.label);
+
+  final String path;
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+}
+
+final List<_TabSpec> _kBottomTabs = [
+  _TabSpec('/popular', Icons.home_outlined, Icons.home, '推荐'),
+  _TabSpec('/timeline', Icons.timeline_outlined, Icons.timeline, '时间表'),
+  _TabSpec('/collect', Icons.favorite_border, Icons.favorite, '追番'),
+  if (kSupportsR18Tabs)
+    _TabSpec('/adult_collect', Icons.folder_special_outlined,
+        Icons.folder_special, '里番收藏'),
+  if (kSupportsLocalVideo)
+    _TabSpec('/local_video', Icons.video_library_outlined,
+        Icons.video_library, '本地视频'),
+  if (kSupportsR18Tabs)
+    _TabSpec('/direct_search', Icons.travel_explore_outlined,
+        Icons.travel_explore, '源搜索'),
+  _TabSpec('/my', Icons.settings_outlined, Icons.settings, '我的'),
+];
+
+final List<_TabSpec> _kRailTabs =
+    _kBottomTabs.where((t) => t.path != '/direct_search').toList();
+
 class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
   final _outletKey = GlobalKey<RouterOutletState>();
-  // [my修复] 初始 -1 (direct_search 直启) 时保持 0; didUpdateWidget 对
-  // -1 保持原高亮 (NavigationBar assert 0<=selectedIndex, 负数白屏)
-  late int _selectedIndex = () {
-    final i = menu.indexForPath(widget.location);
-    return i < 0 ? 0 : i;
-  }();
+
+  /// 当前激活的页签路径 — 按路径导航与记忆, 与列表位置解耦
+  String _selectedPath = '/popular';
+
+  /// 上一次命中的页签位置 (源搜索按钮直航时页签列表无此项, 保持其高亮)
+  int _lastTabIndex = 0;
   DateTime? _lastExitPromptAt;
 
   /// The shell sits at the bottom of the root stack and stays mounted while
   /// other pages cover it, so it publishes that state for its subtree.
   bool _isCovered = false;
 
+  String _pathFromLocation(String location) {
+    final raw =
+        location.startsWith('/tab') ? location.substring(4) : location;
+    var path = Uri.parse(raw).path;
+    if (path.endsWith('/') && path.length > 1) {
+      path = path.substring(0, path.length - 1);
+    }
+    return path;
+  }
+
+  int _highlightIndex(List<_TabSpec> tabs) {
+    final i = tabs.indexWhere((t) => t.path == _selectedPath);
+    if (i >= 0) {
+      _lastTabIndex = i;
+      return i;
+    }
+    // 直航页 (源搜索按钮/未知道路): 保持上一次页签高亮
+    return _lastTabIndex.clamp(0, tabs.length - 1);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedPath = _pathFromLocation(widget.location);
+  }
+
   @override
   void didUpdateWidget(covariant ScaffoldMenu oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.location != widget.location) {
-      final i = menu.indexForPath(widget.location);
-      if (i >= 0) _selectedIndex = i; // -1 (直航页) 保持原高亮
+      _selectedPath = _pathFromLocation(widget.location);
     }
   }
 
@@ -68,16 +123,15 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
     setState(() => _isCovered = value);
   }
 
-  void _selectDestination(int index) {
+  /// 按路径导航 (页签/按钮共用) — 不再有索引换算
+  void _navigateTo(String path) {
     _lastExitPromptAt = null;
-    if (index == _selectedIndex) {
+    if (_selectedPath == path) {
       return;
     }
-    final outlet = _outletKey.currentState;
-    if (outlet == null) return;
-    outlet.navigate('/tab${menu.getPath(index)}/');
-    shellHighlightOverride.value = null; // 回归自动推算
-    setState(() => _selectedIndex = index);
+    _selectedPath = path;
+    if (mounted) setState(() {});
+    _outletKey.currentState?.navigate('/tab$path/');
   }
 
   void _handleSystemBack(BuildContext context) {
@@ -86,8 +140,8 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
       return;
     }
 
-    if (_selectedIndex != 0) {
-      _selectDestination(0);
+    if (_selectedPath != '/popular') {
+      _navigateTo('/popular');
       return;
     }
 
@@ -106,6 +160,10 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
+    final portrait =
+        MediaQuery.orientationOf(context) == Orientation.portrait;
+    final tabs = portrait ? _kBottomTabs : _kRailTabs;
+    final highlight = _highlightIndex(tabs);
     return RouteVisibility(
       isCovered: _isCovered,
       child: PopScope(
@@ -115,19 +173,9 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             _handleSystemBack(context);
           }
         },
-        child: ValueListenableBuilder<int?>(
-          valueListenable: shellHighlightOverride,
-          builder: (context, override, _) {
-            final highlight = override ?? _selectedIndex;
-            return OrientationBuilder(
-              builder: (context, orientation) {
-                return orientation == Orientation.portrait
-                    ? _bottomMenu(context, highlight)
-                    : _sideMenu(context, highlight);
-              },
-            );
-          },
-        ),
+        child: portrait
+            ? _bottomMenu(context, tabs, highlight)
+            : _sideMenu(context, tabs, highlight),
       ),
     );
   }
@@ -150,61 +198,28 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
     );
   }
 
-  Widget _bottomMenu(BuildContext context, int selectedIndex) {
+  Widget _bottomMenu(
+      BuildContext context, List<_TabSpec> tabs, int highlight) {
     return Scaffold(
       body: _outlet(context),
       bottomNavigationBar: NavigationBar(
-        // [my修改] 本地视频页签仅桌面端 (kSupportsLocalVideo), 故列表去 const
-        destinations: <Widget>[
-          NavigationDestination(
-            selectedIcon: Icon(Icons.home),
-            icon: Icon(Icons.home_outlined),
-            label: '推荐',
-          ),
-          NavigationDestination(
-            selectedIcon: Icon(Icons.timeline),
-            icon: Icon(Icons.timeline_outlined),
-            label: '时间表',
-          ),
-          NavigationDestination(
-            selectedIcon: Icon(Icons.favorite),
-            icon: Icon(Icons.favorite_outlined),
-            label: '追番',
-          ),
-          // [my修改] 里番收藏页签 (追番下方; iOS 不提供)
-          if (kSupportsR18Tabs)
-            const NavigationDestination(
-              selectedIcon: Icon(Icons.folder_special),
-              icon: Icon(Icons.folder_special_outlined),
-              label: '里番收藏',
-            ),
-          // [my修改] 本地视频页签仅桌面端
-          if (kSupportsLocalVideo)
+        destinations: [
+          for (final tab in tabs)
             NavigationDestination(
-              selectedIcon: Icon(Icons.video_library),
-              icon: Icon(Icons.video_library_outlined),
-              label: '本地视频',
+              selectedIcon: Icon(tab.selectedIcon),
+              icon: Icon(tab.icon),
+              label: tab.label,
             ),
-          // [my修改] 源直连搜索页签 (iOS 不提供; 底栏保留页签形态)
-          if (kSupportsR18Tabs)
-            const NavigationDestination(
-              selectedIcon: Icon(Icons.travel_explore),
-              icon: Icon(Icons.travel_explore_outlined),
-              label: '源搜索',
-            ),
-          NavigationDestination(
-            selectedIcon: Icon(Icons.settings),
-            icon: Icon(Icons.settings),
-            label: '我的',
-          ),
         ],
-        selectedIndex: selectedIndex < 0 ? -1 : selectedIndex,
-        onDestinationSelected: _selectDestination,
+        selectedIndex: highlight,
+        onDestinationSelected: (index) =>
+            _navigateTo(tabs[index].path),
       ),
     );
   }
 
-  Widget _sideMenu(BuildContext context, int selectedIndex) {
+  Widget _sideMenu(
+      BuildContext context, List<_TabSpec> tabs, int highlight) {
     const borderRadius = BorderRadius.only(
       topLeft: Radius.circular(16),
       bottomLeft: Radius.circular(16),
@@ -217,14 +232,14 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
             child: NavigationRail(
               backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
               groupAlignment: 1,
-              // [my修改] 左上角搜索按钮下方加源搜索按钮 (用户要求:
-              // 源搜索不再是页签, 挂在搜索按钮下面)
+              // [my修改] 左上角搜索按钮 + 其下方的源搜索按钮 (独立按钮,
+              // 不是页签; 直航 /tab/direct_search/ 且保持页签原高亮)
               leading: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   FloatingActionButton(
                     elevation: 0,
-                    heroTag: null,
+                    heroTag: 'menu-search-fab',
                     onPressed: () => context.pushNamed('/search/'),
                     child: const Icon(Icons.search),
                   ),
@@ -232,59 +247,24 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
                   if (kSupportsR18Tabs)
                     FloatingActionButton(
                       elevation: 0,
-                      heroTag: null,
-                      onPressed: () {
-                        _lastExitPromptAt = null;
-                        // [my修复] 按路径直航; 高亮保持点击前的页签 (源搜索
-                        // 独立于页签体系, 不设 selectedIndex — NavigationBar
-                        // 对负数 selectedIndex 有 assert, 会白屏)
-                        _outletKey.currentState
-                            ?.navigate('/tab/direct_search/');
-                      },
+                      heroTag: 'menu-direct-search-fab',
+                      onPressed: () => _navigateTo('/direct_search'),
                       child: const Icon(Icons.travel_explore),
                     ),
                 ],
               ),
               labelType: NavigationRailLabelType.selected,
-              // [my修改] 本地视频页签仅桌面端, 列表去 const
-              destinations: <NavigationRailDestination>[
-                NavigationRailDestination(
-                  selectedIcon: Icon(Icons.home),
-                  icon: Icon(Icons.home_outlined),
-                  label: Text('推荐'),
-                ),
-                NavigationRailDestination(
-                  selectedIcon: Icon(Icons.timeline),
-                  icon: Icon(Icons.timeline_outlined),
-                  label: Text('时间表'),
-                ),
-                NavigationRailDestination(
-                  selectedIcon: Icon(Icons.favorite),
-                  icon: Icon(Icons.favorite_border),
-                  label: Text('追番'),
-                ),
-                // [my修改] 里番收藏页签 (源搜索下方; iOS 不提供)
-                if (kSupportsR18Tabs)
-                  const NavigationRailDestination(
-                    selectedIcon: Icon(Icons.folder_special),
-                    icon: Icon(Icons.folder_special_outlined),
-                    label: Text('里番收藏'),
-                  ),
-                // [my修改] 本地视频页签仅桌面端
-                if (kSupportsLocalVideo)
+              destinations: [
+                for (final tab in tabs)
                   NavigationRailDestination(
-                    selectedIcon: Icon(Icons.video_library),
-                    icon: Icon(Icons.video_library_outlined),
-                    label: Text('本地视频'),
+                    selectedIcon: Icon(tab.selectedIcon),
+                    icon: Icon(tab.icon),
+                    label: Text(tab.label),
                   ),
-                NavigationRailDestination(
-                  selectedIcon: Icon(Icons.settings),
-                  icon: Icon(Icons.settings_outlined),
-                  label: Text('我的'),
-                ),
               ],
-              selectedIndex: selectedIndex < 0 ? -1 : selectedIndex,
-              onDestinationSelected: _selectDestination,
+              selectedIndex: highlight,
+              onDestinationSelected: (index) =>
+                  _navigateTo(tabs[index].path),
             ),
           ),
           Expanded(child: _outlet(context, borderRadius: borderRadius)),

@@ -1,5 +1,3 @@
-import 'package:flutter/foundation.dart';
-
 import 'package:kazumi/utils/constants.dart';
 
 class MenuRouteItem {
@@ -28,11 +26,6 @@ class MenuRoute {
     return index < 0 ? -1 : index;
   }
 }
-
-/// [my新增] shell 页签高亮覆盖通道: 页签外的入口 (源搜索按钮直航) 写
-/// null 强制全灭; 页签点击/系统返回写回索引。ScaffoldMenu 监听本通道,
-/// 优先于 indexForPath 的自动推算 — 绕开 nested-location 链路时序问题。
-final ValueNotifier<int?> shellHighlightOverride = ValueNotifier(null);
 
 final MenuRoute menu = MenuRoute([
   MenuRouteItem(path: '/popular'),

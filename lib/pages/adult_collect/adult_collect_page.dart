@@ -154,13 +154,8 @@ class _AdultCollectPageState extends State<AdultCollectPage>
   }
 
   Future<void> _changeType(BangumiItem item, CollectType type) async {
-    // [my排查] 取消收藏无反应 — 记录调用与结果
-    KazumiLogger().i(
-        'AdultCollect: changeType id=${item.id} type=${type.value}');
     if (type == CollectType.none) {
       await _collectController.deleteCollectLocalOnly(item);
-      KazumiLogger().i(
-          'AdultCollect: deleted id=${item.id}, remaining=${_collectController.collectibles.length}');
       if (mounted) KazumiDialog.showToast(message: '已取消收藏');
       return;
     }

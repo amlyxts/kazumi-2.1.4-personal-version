@@ -468,9 +468,13 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   }
 
   /// 指定页码的完整 URL (与 _loadList 的拼法保持一致, 供预取做缓存键)
+  /// [my修复] 分隔符自适应: _listUrlFor() 无查询参数时 (默认目录页
+  /// /search) 翻页要用 '?', 否则拼出 /search&page=79 (404, 跳转必炸)
   String _listUrlForPage(int page) {
     var url = _listUrlFor();
-    if (page > 1) url += '&page=$page';
+    if (page > 1) {
+      url += (url.contains('?') ? '&' : '?') + 'page=$page';
+    }
     return url;
   }
 

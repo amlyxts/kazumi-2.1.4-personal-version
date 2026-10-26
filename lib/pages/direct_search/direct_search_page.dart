@@ -37,6 +37,15 @@ class _BrowseCard {
   final String title;
   final String href;
   final String thumb;
+
+  Map<String, dynamic> toJson() =>
+      {'title': title, 'href': href, 'thumb': thumb};
+
+  static _BrowseCard fromJson(Map<String, dynamic> json) => _BrowseCard(
+        title: (json['title'] ?? '').toString(),
+        href: (json['href'] ?? '').toString(),
+        thumb: (json['thumb'] ?? '').toString(),
+      );
 }
 
 class _ListPage {
@@ -45,6 +54,7 @@ class _ListPage {
     required this.currentPage,
     this.nextPage,
     this.lastPage,
+    this.cachedAt,
   });
   final List<_BrowseCard> cards;
   final int currentPage;
@@ -52,6 +62,28 @@ class _ListPage {
 
   /// [my新增] 站点翻页条里的末页码 — "第 N / M 页"显示与跳转范围
   final int? lastPage;
+
+  /// [my新增] 落盘时间戳 (持久化缓存的新鲜度展示, SWR 刷新后更新)
+  final int? cachedAt;
+
+  Map<String, dynamic> toJson() => {
+        'cards': [for (final c in cards) c.toJson()],
+        'currentPage': currentPage,
+        'nextPage': nextPage,
+        'lastPage': lastPage,
+        'cachedAt': cachedAt ?? DateTime.now().millisecondsSinceEpoch,
+      };
+
+  static _ListPage fromJson(Map<String, dynamic> json) => _ListPage(
+        cards: [
+          for (final c in (json['cards'] as List? ?? []))
+            _BrowseCard.fromJson(Map<String, dynamic>.from(c)),
+        ],
+        currentPage: (json['currentPage'] as num?)?.toInt() ?? 1,
+        nextPage: (json['nextPage'] as num?)?.toInt(),
+        lastPage: (json['lastPage'] as num?)?.toInt(),
+        cachedAt: (json['cachedAt'] as num?)?.toInt(),
+      );
 }
 
 class _BangumiRef {
@@ -163,6 +195,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
           ? _rememberedPlugin
           : usable.first;
     }
+    _restorePageCache();
     _genre = _rememberedGenre;
     _activeTags.addAll(_rememberedTags);
     _page = _rememberedPage;
@@ -556,6 +589,44 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       ..[url] = page;
     while (_pageCache.length > 8) {
       _pageCache.remove(_pageCache.keys.first);
+    }
+    _persistPageCache();
+  }
+
+  /// [my新增] 页缓存磁盘持久化: App 重启后源搜索首屏直接上屏上次内容
+  /// (SWR 后台刷新保证新鲜度) — 热点/慢网下 4s 首屏成本只在真冷启动付。
+  void _persistPageCache() {
+    unawaited(() async {
+      try {
+        final payload = {
+          for (final e in _pageCache.entries)
+            e.key: e.value.toJson(),
+        };
+        await GStorage.putSetting(
+            SettingsKeys.directSearchPageCache, jsonEncode(payload));
+      } catch (e) {
+        KazumiLogger().w('DirectSearch: persist page cache failed: $e');
+      }
+    }());
+  }
+
+  void _restorePageCache() {
+    final raw =
+        GStorage.getSetting(SettingsKeys.directSearchPageCache).trim();
+    if (raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      for (final e in decoded.entries) {
+        try {
+          _pageCache[e.key] = _ListPage.fromJson(
+              Map<String, dynamic>.from(e.value as Map));
+        } catch (_) {}
+      }
+      KazumiLogger().i(
+          'DirectSearch: restored ${_pageCache.length} pages from disk');
+    } catch (e) {
+      KazumiLogger().w('DirectSearch: restore page cache failed: $e');
     }
   }
 

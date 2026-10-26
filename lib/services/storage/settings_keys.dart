@@ -614,6 +614,12 @@ class SettingsKeys {
     0,
     group: SettingGroup.sync,
   );
+  // [my新增] 源直连浏览页缓存磁盘持久化 (App 重启后首屏秒开, SWR 刷新)
+  static const directSearchPageCache = SettingKey<String>(
+    'directSearchPageCache',
+    '',
+    group: SettingGroup.proxy,
+  );
   static const downloadDanmaku = SettingKey<bool>(
     _SettingBoxKey.downloadDanmaku,
     true,
@@ -793,6 +799,7 @@ class SettingsKeys {
     webDavEnablePluginSync,
     webDavEnableSettingsSync,
     webDavSettingsSyncUpdatedAt,
+    directSearchPageCache,
     downloadDanmaku,
     downloadDirectory,
     downloadDirectoryBookmark,

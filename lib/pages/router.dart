@@ -37,7 +37,9 @@ final ValueNotifier<int?> shellHighlightOverride = ValueNotifier(null);
 final MenuRoute menu = MenuRoute([
   MenuRouteItem(path: '/popular'),
   MenuRouteItem(path: '/timeline'),
-  MenuRouteItem(path: '/collect'),
+  // [my修改] 里番收藏页签 (追番下方; iOS 不提供) — 索引表必须与
+  // menu.dart 的 destinations 顺序逐项一致 (靠位置索引耦合)
+  if (kSupportsR18Tabs) MenuRouteItem(path: '/adult_collect'),
   // [my修改] 本地视频页签 (仅桌面端)
   if (kSupportsLocalVideo) MenuRouteItem(path: '/local_video'),
   // [my修改] 源直连搜索页签 (iOS 不提供)

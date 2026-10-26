@@ -174,6 +174,14 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       // [my修复] 初始加载带记忆页码 — 原先 initState 恢复 _page 后,
       // 这里仍按默认 page:1 加载并回写, 记忆等于白恢复
       _loadList(reset: true, page: _rememberedPage > 1 ? _rememberedPage : 1);
+      // [my提速] 预取先行: 与当前页加载并行 (不等它完成), 批量拉相邻页
+      // — 进页后用户第一次翻页大概率命中缓存
+      final startPage = _rememberedPage > 1 ? _rememberedPage : 1;
+      _prefetchBatch([
+        _listUrlForPage(startPage),
+        _listUrlForPage(startPage + 1),
+        if (startPage > 1) _listUrlForPage(startPage - 1),
+      ]);
     });
   }
 

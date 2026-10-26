@@ -379,14 +379,19 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     final sw = Stopwatch()..start();
     final viaCurl = await _fetchViaCurl(url);
     if (viaCurl != null && viaCurl.cards.isNotEmpty) {
-      KazumiLogger().i(
-          'DirectSearch: curl fast path ${sw.elapsedMilliseconds}ms, ${viaCurl.cards.length} cards');
+      // [my] 慢速成功 (>1.5s) 落 WARNING 可见, 供性能排查
+      if (sw.elapsedMilliseconds > 1500) {
+        KazumiLogger().w(
+            'DirectSearch: curl fast path SLOW ${sw.elapsedMilliseconds}ms, ${viaCurl.cards.length} cards');
+      }
       return viaCurl;
     }
     final viaDio = await _fetchViaDio(url);
     if (viaDio != null && viaDio.cards.isNotEmpty) {
-      KazumiLogger().i(
-          'DirectSearch: dio fast path ${sw.elapsedMilliseconds}ms, ${viaDio.cards.length} cards');
+      if (sw.elapsedMilliseconds > 1500) {
+        KazumiLogger().w(
+            'DirectSearch: dio fast path SLOW ${sw.elapsedMilliseconds}ms, ${viaDio.cards.length} cards');
+      }
       return viaDio;
     }
     if (!allowFallback) {

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
+import 'package:kazumi/services/site_comment/site_comment_service.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/modules/bangumi/episode_item.dart';
 import 'package:kazumi/pages/player/episode_comments_picker.dart';
@@ -78,6 +79,25 @@ class _EpisodeCommentsSheetState extends State<EpisodeCommentsSheet>
       _isLoading = true;
       _hasError = false;
     });
+
+    // [my新增] 评论分区: 直连来源 (当前集 pageUrl 为源站地址) 走源站
+    // 评论; 表番维持 bgm 讨论。判定依据 resolveEpisode 的 pageUrl。
+    final resolved =
+        _controller.resolveEpisode(widget.selection);
+    final pageUrl = resolved?.pageUrl ?? '';
+    final isSite =
+        SiteCommentService.videoIdFromUrl(pageUrl) != null;
+    if (isSite) {
+      final applied =
+          await _controller.querySiteEpisodeComments(pageUrl);
+      if (!mounted || version != _requestVersion) return;
+      setState(() {
+        _isLoading = false;
+        _hasError = !applied;
+      });
+      return;
+    }
+    _controller.commentsFromSite = false;
     try {
       final applied = await _controller.queryBangumiEpisodeCommentsByID(
           _controller.bangumiItem.id, _selectedEpisode);

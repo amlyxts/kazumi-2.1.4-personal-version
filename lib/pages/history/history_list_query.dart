@@ -1,6 +1,5 @@
-import 'dart:io';
-
 import 'package:kazumi/modules/history/history_module.dart';
+import 'package:kazumi/services/storage/storage.dart';
 
 enum HistorySourceFilter {
   all('全部'),
@@ -35,9 +34,11 @@ enum HistorySourceFilter {
       };
 }
 
-/// [my新增] iOS 隐藏直连历史 (方案A): 默认视图与"在线"档都不显示
-/// 直连来源条目; "直连"档本尊也不列入选项 (等于功能整体隐藏)。
-final bool kHideDirectHistory = Platform.isIOS;
+/// [my修改] 隐藏直连历史改为设置项 (默认关, 双平台通用):
+/// 开启后三档均滤直连条目且"直连"档不显示 — 原方案A为 iOS 硬编码,
+/// 用户要求可在任意平台自行开关。
+bool get kHideDirectHistory =>
+    GStorage.getSetting(SettingsKeys.hideDirectHistory);
 
 class HistoryDateGroup {
   HistoryDateGroup._(this.date, this.entries);

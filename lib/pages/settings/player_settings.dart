@@ -34,6 +34,9 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
   late bool playResume;
   late bool showPlayerError;
   late bool privateMode;
+
+  /// [my新增] 隐藏直连历史 (默认关)
+  late bool hideDirectHistory;
   late bool playerDebugMode;
   late bool playerDisableAnimations;
   late bool forceAdBlocker;
@@ -66,6 +69,8 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
         GStorage.getSetting<bool>(SettingsKeys.androidAutoEnterPIP);
     playResume = GStorage.getSetting<bool>(SettingsKeys.playResume);
     privateMode = GStorage.getSetting<bool>(SettingsKeys.privateMode);
+    hideDirectHistory =
+        GStorage.getSetting<bool>(SettingsKeys.hideDirectHistory);
     showPlayerError = GStorage.getSetting<bool>(SettingsKeys.showPlayerError);
     playerDebugMode = GStorage.getSetting<bool>(SettingsKeys.playerDebugMode);
     autoPlayNext = GStorage.getSetting<bool>(SettingsKeys.autoPlayNext);
@@ -406,6 +411,19 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                 title: Text('隐身模式'),
                 description: Text('不保留观看记录'),
                 initialValue: privateMode,
+              ),
+              // [my新增] 隐藏直连历史: 三档过滤 + 直连档隐藏 (双平台)
+              SettingsTile.switchTile(
+                leading: Icons.hide_image_outlined,
+                onToggle: (value) async {
+                  hideDirectHistory = value ?? !hideDirectHistory;
+                  await GStorage.putSetting<bool>(
+                      SettingsKeys.hideDirectHistory, hideDirectHistory);
+                  setState(() {});
+                },
+                title: Text('隐藏直连历史'),
+                description: Text('历史页不显示源直连来源的观看记录 (含全部/在线/缓存视图)'),
+                initialValue: hideDirectHistory,
               ),
             ],
           ),

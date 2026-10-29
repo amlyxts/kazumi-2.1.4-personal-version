@@ -620,6 +620,14 @@ class SettingsKeys {
     '',
     group: SettingGroup.proxy,
   );
+  // [my新增] 隐藏直连(里番来源)历史: 开启后历史页全部/在线/缓存三档
+  // 均不显示直连条目, "直连"档不出现 — 双平台通用 (默认关)
+  static const hideDirectHistory = SettingKey<bool>(
+    'hideDirectHistory',
+    false,
+    group: SettingGroup.misc,
+  );
+
   // [my新增] 里番区随机选片: 抽取/跳过历史 (JSON) 与全局衰减标记
   static const adultRandomPickHistory = SettingKey<String>(
     'adultRandomPickHistory',
@@ -807,6 +815,7 @@ class SettingsKeys {
     webDavSettingsSyncUpdatedAt,
     directSearchPageCache,
     adultRandomPickHistory,
+    hideDirectHistory,
     downloadDanmaku,
     downloadDirectory,
     downloadDirectoryBookmark,

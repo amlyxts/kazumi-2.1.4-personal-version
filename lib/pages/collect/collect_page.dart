@@ -13,6 +13,8 @@ import 'package:kazumi/modules/collect/collect_layout.dart';
 import 'package:kazumi/modules/collect/collect_sync_plan.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/pages/adult_collect/adult_random_pick_sheet.dart';
+import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/collect/collect_library_view.dart';
 import 'package:kazumi/pages/collect/collect_sync_dialog.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -72,6 +74,20 @@ class _CollectPageState extends State<CollectPage> with KazumiDialogOwner {
         SettingsKeys.defaultCollectLayout, layout.name));
   }
 
+  /// [my新增] 随机选片 (表番区): 加权轮盘从"想看"抽三选一,
+  /// 点选打开条目详情页 (表番的"打开"是看详情, 与里番直连播放不同)
+  Future<void> _showRandomPick() async {
+    await showAdultRandomPickSheet(
+      context,
+      collectController: collectController,
+      historyController: inject<HistoryController>(),
+      onPlay: (item) {
+        if (mounted) context.pushNamed('/info/', arguments: item);
+      },
+      section: 0,
+    );
+  }
+
   Future<void> _changeType(BangumiItem item, CollectType type) async {
     if (_syncDialogOpen || _pendingIds.contains(item.id)) return;
     setState(() => _pendingIds.add(item.id));
@@ -123,6 +139,12 @@ class _CollectPageState extends State<CollectPage> with KazumiDialogOwner {
               ?.copyWith(fontWeight: FontWeight.w700),
         ),
         actions: [
+          // [my新增] 随机选片 (表番区): 与里番区同款加权轮盘三选一
+          IconButton(
+            tooltip: '随机选片',
+            icon: const Icon(Icons.casino_rounded),
+            onPressed: _showRandomPick,
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: Tooltip(
@@ -135,7 +157,7 @@ class _CollectPageState extends State<CollectPage> with KazumiDialogOwner {
               ),
             ),
           ),
-        ],
+       ],
       ),
       body: SafeArea(
         top: false,

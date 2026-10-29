@@ -24,11 +24,15 @@ class AdultRandomPickSheet extends StatefulWidget {
     required this.collectController,
     required this.historyController,
     required this.onPlay,
+    this.section = 1,
   });
 
   final CollectController collectController;
   final HistoryController historyController;
   final void Function(BangumiItem item) onPlay;
+
+  /// [my新增] 抽取分区: 1=里番区 (默认, 原行为) / 0=表番区 (追番页复用)
+  final int section;
 
   @override
   State<AdultRandomPickSheet> createState() => _AdultRandomPickSheetState();
@@ -112,7 +116,7 @@ class _AdultRandomPickSheetState extends State<AdultRandomPickSheet> {
     }
     final now = DateTime.now();
     return widget.collectController.collectibles.where((c) {
-      if (c.section != 1) return false;
+      if (c.section != widget.section) return false;
       if (c.type != CollectType.planToWatch.value) return false;
       // 剔除已看完: 历史进度存在且推进到较后位置时视为看过
       final h = seen[c.bangumiItem.id];
@@ -342,6 +346,7 @@ Future<void> showAdultRandomPickSheet(
   required CollectController collectController,
   required HistoryController historyController,
   required void Function(BangumiItem item) onPlay,
+  int section = 1,
 }) {
   return showDialog(
     context: context,
@@ -349,6 +354,7 @@ Future<void> showAdultRandomPickSheet(
       collectController: collectController,
       historyController: historyController,
       onPlay: onPlay,
+      section: section,
     ),
   );
 }

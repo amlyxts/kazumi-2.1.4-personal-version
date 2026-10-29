@@ -620,6 +620,12 @@ class SettingsKeys {
     '',
     group: SettingGroup.proxy,
   );
+  // [my新增] 里番区随机选片: 抽取/跳过历史 (JSON) 与全局衰减标记
+  static const adultRandomPickHistory = SettingKey<String>(
+    'adultRandomPickHistory',
+    '',
+    group: SettingGroup.collect,
+  );
   static const downloadDanmaku = SettingKey<bool>(
     _SettingBoxKey.downloadDanmaku,
     true,
@@ -800,6 +806,7 @@ class SettingsKeys {
     webDavEnableSettingsSync,
     webDavSettingsSyncUpdatedAt,
     directSearchPageCache,
+    adultRandomPickHistory,
     downloadDanmaku,
     downloadDirectory,
     downloadDirectoryBookmark,

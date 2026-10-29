@@ -9,6 +9,8 @@ import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/modules/collect/collect_layout.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/pages/history/history_controller.dart';
+import 'package:kazumi/pages/adult_collect/adult_random_pick_sheet.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
@@ -126,6 +128,11 @@ class _AdultCollectPageState extends State<AdultCollectPage>
         ),
         actions: [
           IconButton(
+            tooltip: '随机选片',
+            icon: const Icon(Icons.casino_rounded),
+            onPressed: _showRandomPick,
+          ),
+          IconButton(
             tooltip: '从追番导入',
             icon: const Icon(Icons.move_down_rounded),
             onPressed: _showImportPicker,
@@ -175,6 +182,17 @@ class _AdultCollectPageState extends State<AdultCollectPage>
     } catch (_) {
       KazumiDialog.showToast(message: '修改收藏状态失败，请稍后重试');
     }
+  }
+
+  /// 随机选片: 加权轮盘从"想看"抽三选一, 点选即播 (复用卡片播放链)
+  Future<void> _showRandomPick() async {
+    await showAdultRandomPickSheet(
+      context,
+      collectController: _collectController,
+      historyController: inject<HistoryController>(),
+      onPlay: (item) => _open(CollectedBangumi(item, DateTime.now(),
+          CollectType.planToWatch.value, section: 1)),
+    );
   }
 
   /// 从追番 (表番区) 批量导入

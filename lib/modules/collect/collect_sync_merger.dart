@@ -61,8 +61,22 @@ class CollectSyncMerger {
     required List<CollectedBangumi> remoteCollectibles,
     required List<CollectedBangumiChange> remoteChanges,
   }) {
+    // [my修复] 基底 = 远端 ∪ 本地独有条目。原实现以远端为唯一基底,
+    // 本地独有的收藏 (典型: 里番区, 云端 collectibles.tmp 由旧版本
+    // 上传、不含它们) 若 changes 中无 action=1 记录, 合并结果直接
+    // 丢弃 → patchCollectibles 清库回写后本地条目消失 (里番收藏
+    // 清空的另一半根因)。本地独有条目无条件保留, 由 changes 回放
+    // 决定其最终 type。
     final mergedCollectibles =
         remoteCollectibles.map(_copyCollectible).toList();
+    final remoteIds = remoteCollectibles
+        .map((c) => c.bangumiItem.id)
+        .toSet();
+    for (final local in localCollectibles) {
+      if (!remoteIds.contains(local.bangumiItem.id)) {
+        mergedCollectibles.add(_copyCollectible(local));
+      }
+    }
     final newLocalChanges = localChanges.where((localChange) {
       return !remoteChanges
           .any((remoteChange) => remoteChange.id == localChange.id);
@@ -88,6 +102,8 @@ class CollectSyncMerger {
         localCollectible.bangumiItem,
         localCollectible.time,
         change.type,
+        // [my修复] 变更回放保留原条目 section (里番区改类型不丢分区)
+        section: localCollectible.section,
       );
       final index = mergedCollectibles.indexWhere(
         (item) => item.bangumiItem.id == change.bangumiID,
@@ -233,10 +249,13 @@ class CollectSyncMerger {
   }
 
   static CollectedBangumi _copyCollectible(CollectedBangumi collectible) {
+    // [my修复] 保留 section — 此前构造不带该参数 (默认 0), WebDAV 合并
+    // 回写后里番区条目全部变表番 (迁移到追番 + 里番收藏清空的根因)
     return CollectedBangumi(
       collectible.bangumiItem,
       collectible.time,
       collectible.type,
+      section: collectible.section,
     );
   }
 

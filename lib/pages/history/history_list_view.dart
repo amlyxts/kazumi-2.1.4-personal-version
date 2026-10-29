@@ -152,7 +152,10 @@ class _HistoryListViewState extends State<HistoryListView> {
                             runSpacing: 8,
                             children: [
                               for (final source in HistorySourceFilter.values)
-                                _filter(source),
+                                // [my新增] iOS 隐藏"直连"档 (隐私默认,
+                                // 数据仍在, 其他平台可筛)
+                                if (!kHideDirectHistory || source != HistorySourceFilter.direct)
+                                  _filter(source),
                             ],
                           ),
                           const SizedBox(height: 20),

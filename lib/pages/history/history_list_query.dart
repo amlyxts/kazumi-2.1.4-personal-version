@@ -1,22 +1,40 @@
+import 'dart:io';
+
 import 'package:kazumi/modules/history/history_module.dart';
 
 enum HistorySourceFilter {
   all('全部'),
   online('在线'),
-  offline('缓存');
+  offline('缓存'),
+  // [my新增] 直连档: 源直连浏览产生的历史 (播放页地址含 watch?v= 特征),
+  // 即里番来源 — iOS 默认隐藏该档 (公共场合隐私), 其他平台可筛
+  direct('直连');
 
   const HistorySourceFilter(this.label);
 
   final String label;
 
+  /// 直连来源判定: 播放页地址带 watch?v= (源站播放页特征)。
+  /// 未匹配的直连条目 (极旧记录无 pageUrl) 归"在线"不误藏。
+  static bool isDirect(History history) =>
+      history.episodePageUrl.contains('watch?v=');
+
   bool _matches(History history) => switch (this) {
-        all => true,
+        all =>
+          // iOS: 直连档隐藏 = 全部视图也不显示直连条目 (隐私默认)
+          kHideDirectHistory ? !isDirect(history) : true,
         online => HistoryEntryKind.normalize(history.entryKind) ==
-            HistoryEntryKind.online,
+                HistoryEntryKind.online &&
+            !(kHideDirectHistory && isDirect(history)),
         offline => HistoryEntryKind.normalize(history.entryKind) ==
             HistoryEntryKind.offline,
+        direct => isDirect(history),
       };
 }
+
+/// [my新增] iOS 隐藏直连历史 (方案A): 默认视图与"在线"档都不显示
+/// 直连来源条目; "直连"档本尊也不列入选项 (等于功能整体隐藏)。
+final bool kHideDirectHistory = Platform.isIOS;
 
 class HistoryDateGroup {
   HistoryDateGroup._(this.date, this.entries);

@@ -837,6 +837,9 @@ class SettingsKeys {
   /// [my新增] 设置云同步排除名单: 敏感凭据/一次性流程标记/平台相关项
   /// 不入云 (跨设备指错路径或泄露凭据)。
   static const Set<String> settingsSyncExcluded = {
+    // [my] 隐藏直连历史: 各设备独立开关 (iOS 开/Windows 关是典型组合),
+    // 同步会互相覆盖
+    'hideDirectHistory',
     'bangumiAccessToken',
     'proxyConfigured',
     'shortcutDialogShown',

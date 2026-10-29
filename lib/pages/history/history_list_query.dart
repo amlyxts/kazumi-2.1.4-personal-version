@@ -27,7 +27,10 @@ enum HistorySourceFilter {
                 HistoryEntryKind.online &&
             !(kHideDirectHistory && isDirect(history)),
         offline => HistoryEntryKind.normalize(history.entryKind) ==
-            HistoryEntryKind.offline,
+                HistoryEntryKind.offline &&
+            // [my修复] iOS 缓存档同样滤直连条目 — 此前只滤了全部/在线,
+            // 缓存视图仍暴露 (用户实测发现)
+            !(kHideDirectHistory && isDirect(history)),
         direct => isDirect(history),
       };
 }

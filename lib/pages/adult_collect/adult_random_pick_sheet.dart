@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
@@ -233,7 +232,9 @@ class _AdultRandomPickSheetState extends State<AdultRandomPickSheet> {
   }
 
   void _play(_PickCandidate c) {
-    KazumiDialog.dismiss();
+    // [my修复] 弹层由 showDialog 打开 (原生路由), KazumiDialog.dismiss
+    // 管不到它 — 关闭用 Navigator.pop
+    Navigator.of(context).pop();
     widget.onPlay(c.entry.bangumiItem);
   }
 
@@ -266,7 +267,7 @@ class _AdultRandomPickSheetState extends State<AdultRandomPickSheet> {
             child: const Text('都不满意, 换一批'),
           ),
         TextButton(
-          onPressed: () => KazumiDialog.dismiss(),
+          onPressed: () => Navigator.of(context).pop(),
           child: Text('关闭',
               style:
                   TextStyle(color: Theme.of(context).colorScheme.outline)),

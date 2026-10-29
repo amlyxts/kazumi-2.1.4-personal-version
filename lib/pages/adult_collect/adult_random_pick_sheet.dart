@@ -101,11 +101,6 @@ class _AdultRandomPickSheetState extends State<AdultRandomPickSheet> {
   int _skipCount(int id) =>
       ((_historyOf(id)['skips'] as num?) ?? 0).toInt();
 
-  DateTime? _lastPickedAt(int id) {
-    final v = (_historyOf(id)['lastPicked'] as num?)?.toInt();
-    return v == null ? null : DateTime.fromMillisecondsSinceEpoch(v);
-  }
-
   // ====== 抽取 ======
 
   List<CollectedBangumi> _pool() {
@@ -130,9 +125,8 @@ class _AdultRandomPickSheetState extends State<AdultRandomPickSheet> {
           return false;
         }
       }
-      // 近 7 天抽中过的剔除 (防重复抽同一个)
-      final last = _lastPickedAt(c.bangumiItem.id);
-      if (last != null && now.difference(last).inDays < 7) return false;
+      // [my修改] 不做"近期抽中过"剔除 — 池永不因抽取而枯竭,
+      // 重复抽中由跳过衰减调节权重 (用户要求: 允许重复随机)
       return true;
     }).toList();
   }
@@ -146,8 +140,8 @@ class _AdultRandomPickSheetState extends State<AdultRandomPickSheet> {
         _loaded = true;
         _error = widget.collectController.collectibles
                 .any((c) => c.section == 1)
-            ? '抽取池为空 (想看的里番都在看/已看完/近 7 天抽过)'
-            : '里番区还没有"想看"收藏';
+            ? '抽取池为空 (想看的都在看/已看完)'
+            : '还没有"想看"收藏';
       });
       return;
     }
@@ -211,11 +205,6 @@ class _AdultRandomPickSheetState extends State<AdultRandomPickSheet> {
       _error = picked.isEmpty ? '抽取失败，请重试' : null;
     });
 
-    // 记录抽取时间 (防 7 天重复)
-    for (final c in picked) {
-      _historyOf(c.entry.bangumiItem.id)['lastPicked'] =
-          now2().millisecondsSinceEpoch;
-    }
     unawaited(_persistPickHistory());
   }
 

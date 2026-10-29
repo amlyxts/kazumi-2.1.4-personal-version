@@ -110,11 +110,16 @@ class SiteCommentService {
   }
 
   static SiteCommentItem _parseOne(String seg) {
-    // 头行纯文本: "银河球棒侠  4天前" (comment-index-text 内容)
-    final headMatch = RegExp(r'comment-index-text[^>]*>(.*?)</div>',
+    // [my修复] 响应是 JSON 字符串: </div> 写作 <\/div> (字面反斜杠),
+    // 中文是 \uXXXX 转义 — 提取前先 JSON 解码, 尾锚用 RegExp.escape
+    // 匹配字面形态 (验证脚本按真实样本逐步确认)。
+    final decoded = _jsonUnescape(seg);
+    final closeDiv = RegExp.escape('</div>');
+    final headMatch = RegExp(
+            'comment-index-text[^>]*>(.*?)$closeDiv',
             dotAll: true)
-        .firstMatch(seg);
-    final headPlain = _plainText(headMatch?.group(1) ?? seg).trim();
+        .firstMatch(decoded);
+    final headPlain = _plainText(headMatch?.group(1) ?? decoded).trim();
     // 头行拆分: 用户名在前, 时间 (相对/日期) 在后
     final timeMatch = RegExp(
             r'(\d+\s*[天小时分钟周月秒]{1,3}前|\d{4}-\d{2}-\d{2}[^ ]{0,5})')
@@ -125,21 +130,21 @@ class SiteCommentService {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
 
-    // 内容: 头行 div 结束后到点赞/回复区之前的纯文本
+    // 内容: 头行结束后到回复区/操作条之前 (回复区先截 — thumb_up 在
+    // more_vert 之后, 只截操作条会把点赞数字带进内容)
     final bodyStart = headMatch?.end ?? 0;
     var content = '';
     if (bodyStart > 0) {
-      final bodySeg = seg.substring(bodyStart);
-      final contentMatch =
-          RegExp(r'^(.*?)(?:more_vert|thumb_up|回覆|舉報|$)', dotAll: true)
-              .firstMatch(_plainText(bodySeg));
-      content = (contentMatch?.group(1) ?? '')
+      final bodySeg = decoded.substring(bodyStart);
+      final mainZone = bodySeg.split('reply-section-wrapper').first;
+      final mainCut = mainZone.split('more_vert').first;
+      content = _plainText(mainCut)
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
     }
 
-    // 点赞数: thumb_up 后的数字 (取最大)
-    final plain = _plainText(seg);
+    // 点赞数: thumb_up 后的数字 (全段抓取取最大, 含回复区内的)
+    final plain = _plainText(decoded);
     var likes = 0;
     for (final m in RegExp(r'thumb_up\D{0,40}?(\d{1,6})').allMatches(plain)) {
       final v = int.tryParse(m.group(1)!) ?? 0;
@@ -148,7 +153,7 @@ class SiteCommentService {
 
     // 回复数: load-replies-btn 计数
     final replyCount =
-        RegExp(r'load-replies-btn').allMatches(seg).length;
+        RegExp(r'load-replies-btn').allMatches(decoded).length;
 
     return SiteCommentItem(
       user: user.isEmpty ? '匿名' : user,
@@ -157,6 +162,25 @@ class SiteCommentService {
       likes: likes,
       replyCount: replyCount,
     );
+  }
+
+  /// JSON 字符串体解码: \uXXXX (中文) / \n / \" / <\/div> 转义还原。
+  /// [my新增] 响应整段是 JSON 字符串值, 未解码则中文与转义标记会污染
+  /// 所有下游解析 (字段错位根因之一)。
+  static String _jsonUnescape(String raw) {
+    try {
+      // 依序转义: 先反斜杠 (避免二次转义), 再引号, 再控制字符;
+      // 转义后的串包进 JSON 引号即可 jsonDecode 还原
+      final escaped = raw
+          .replaceAll('\\', '\\\\')
+          .replaceAll(r'"', r'\"')
+          .replaceAll('\n', '\\n')
+          .replaceAll('\r', '\\r')
+          .replaceAll('\t', '\\t');
+      return jsonDecode('"$escaped"') as String;
+    } catch (_) {
+      return raw; // 解码失败原样返回 (字段可能带转义, 比崩溃好)
+    }
   }
 
   /// HTML → 纯文本 (剥标签, &nbsp; 等实体还原, 压空白)

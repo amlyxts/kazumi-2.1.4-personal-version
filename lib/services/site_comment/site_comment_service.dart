@@ -94,8 +94,11 @@ class SiteCommentService {
   /// 条目的锚点; 条目正文为其后到下一锚点之间。回复懒加载按钮计数。
   static List<SiteCommentItem> parseCommentsHtml(String html) {
     final items = <SiteCommentItem>[];
-    // 锚点切分: comment-index-text 出现即新条目开始
-    final anchor = RegExp(r'<div[^>]*comment-index-text');
+    // [my修复] 分条容器 = report-btn-wrapper (66 组, 每组 = 头行+内容+
+    // 回复区)。曾误用 comment-index-text (132 个: 66 主楼 + 66 回复者
+    // 头行), 回复者头行被当新评论 → 主楼段被腰斩、内容全空 (字段二次
+    // 错位的根因)。容器内头行/内容/回复由 _parseOne 处理。
+    final anchor = RegExp(r'report-btn-wrapper');
     final matches = anchor.allMatches(html).toList();
     for (var i = 0; i < matches.length; i++) {
       final start = matches[i].start;
@@ -103,7 +106,8 @@ class SiteCommentService {
           ? matches[i + 1].start
           : html.length;
       try {
-        items.add(_parseOne(html.substring(start, end)));
+        final item = _parseOne(html.substring(start, end));
+        if (item.content.isNotEmpty) items.add(item);
       } catch (_) {}
     }
     return items;

@@ -142,14 +142,16 @@ const List<String> mpvAnime4KShaders = [
 ];
 
 /// 超分辨率滤镜 (轻量)
+/// [my修复] 对齐官方 Mode B 完整链 (Clamp → Restore_Soft_M → Upscale_M →
+/// AutoDown×2 → Upscale_M): 原组合 (Restore_M+Restore_S 连跑 + M/S 混插)
+/// 非官方配方, 双重修复过度平滑致线稿发糊
 const List<String> mpvAnime4KShadersLite = [
   'Anime4K_Clamp_Highlights.glsl',
-  'Anime4K_Restore_CNN_M.glsl',
-  'Anime4K_Restore_CNN_S.glsl',
+  'Anime4K_Restore_CNN_Soft_M.glsl',
   'Anime4K_Upscale_CNN_x2_M.glsl',
   'Anime4K_AutoDownscalePre_x2.glsl',
   'Anime4K_AutoDownscalePre_x4.glsl',
-  'Anime4K_Upscale_CNN_x2_S.glsl'
+  'Anime4K_Upscale_CNN_x2_M.glsl'
 ];
 
 /// FSRCNNX 实拍超分着色器

@@ -470,6 +470,18 @@ abstract class _PlayerPlaybackController with Store {
         SettingsKeys.playerDebandEnable,
       );
       await pp.setProperty('deband', debandEnable ? 'yes' : 'no');
+      // [my修复] 缩放器全程 mpv 默认双线性 → 超分 2x 后回缩屏幕发糊
+      // (1080p 源+1080p 屏尤其明显, 探查报告缺陷 1)。按 anime 社区标准
+      // 配置缩放链 (agyild SSim 系着色器同款推荐配置); 仅桌面端 —
+      // 移动端 GPU 差异大, 不动默认避免性能回退。
+      if (isDesktop()) {
+        await pp.setProperty('scale', 'ewa_lanczossharp');
+        await pp.setProperty('dscale', 'mitchell');
+        await pp.setProperty('cscale', 'spline36');
+        await pp.setProperty('correct-downscaling', 'yes');
+        await pp.setProperty('linear-downscaling', 'no');
+        await pp.setProperty('sigmoid-upscaling', 'yes');
+      }
       // [my修改] 运动补偿: 帧时钟对齐刷新率, 消除 24fps 源的规律性顿挫
       // (120Hz=5x24 整数倍屏收益最大; tscale 用 mpv 默认 oversample, 无鬼影)。
       final bool motionCompensationEnable = GStorage.getSetting(

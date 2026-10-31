@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
@@ -27,6 +29,10 @@ class _UpdateSettingsPageState extends State<UpdateSettingsPage> {
                 SettingsTile.switchTile(
                   leading: Icons.update_rounded,
                   title: const Text('应用更新'),
+                  // [my调整] iOS 侧载版无应用内安装渠道, 更新走分发渠道重装
+                  description: Platform.isIOS
+                      ? const Text('iOS 侧载版不支持应用内更新, 有新版本时请通过分发渠道重新安装')
+                      : null,
                   initialValue: _autoUpdate,
                   onToggle: (value) {
                     setState(() => _autoUpdate = value ?? !_autoUpdate);

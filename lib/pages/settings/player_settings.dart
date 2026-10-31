@@ -471,18 +471,22 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                 initialValue: privateMode,
               ),
               // [my新增] 隐藏直连历史: 三档过滤 + 直连档隐藏 (双平台)
-              SettingsTile.switchTile(
-                leading: Icons.hide_image_outlined,
-                onToggle: (value) async {
-                  hideDirectHistory = value ?? !hideDirectHistory;
-                  await GStorage.putSetting<bool>(
-                      SettingsKeys.hideDirectHistory, hideDirectHistory);
-                  setState(() {});
-                },
-                title: Text('隐藏直连历史'),
-                description: Text('历史页不显示源直连来源的观看记录 (含全部/在线/缓存视图)'),
-                initialValue: hideDirectHistory,
-              ),
+              // [my调整] iOS 恒隐藏直连条目 (kSupportsR18Tabs=false 即无直连
+              // 来源), 开关无意义不显示
+              if (kSupportsR18Tabs)
+                SettingsTile.switchTile(
+                  leading: Icons.hide_image_outlined,
+                  onToggle: (value) async {
+                    hideDirectHistory = value ?? !hideDirectHistory;
+                    await GStorage.putSetting<bool>(
+                        SettingsKeys.hideDirectHistory, hideDirectHistory);
+                    setState(() {});
+                  },
+                  title: Text('隐藏直连历史'),
+                  description: Text(
+                      '历史页不显示源直连来源的观看记录 (含全部/在线/缓存视图)'),
+                  initialValue: hideDirectHistory,
+                ),
             ],
           ),
           SettingsSection(

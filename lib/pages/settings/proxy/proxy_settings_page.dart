@@ -173,9 +173,12 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                 ),
               ],
             ),
-          SettingsSection(
-            title: const Text('FlareSolverr (CF 挑战求解)'),
-            tiles: [
+          // [my修复] FlareSolverr 是源直连专用工具, iOS 包不出现 (用户铁律:
+          // iOS 为纯表番观看端, 源直连/里番相关内容一律不出现)
+          if (kSupportsR18Tabs)
+            SettingsSection(
+              title: const Text('FlareSolverr (CF 挑战求解)'),
+              tiles: [
               SettingsTile(
                 leading: Icons.local_fire_department_rounded,
                 onPressed: (_) => _editFlareSolverrField(

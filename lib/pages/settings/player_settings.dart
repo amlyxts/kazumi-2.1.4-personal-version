@@ -45,6 +45,10 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
   late bool brightnessVolumeGesture;
   late int playerButtonSkipTime;
   late int playerArrowKeySkipTime;
+  // [my新增] 自动跳过片头片尾
+  late bool autoSkipOpEd;
+  late int autoSkipOpManualSeconds;
+  late int autoSkipEdManualSeconds;
   late int playerLogLevel;
   late int playerControllerLayerDisappearTime;
 
@@ -88,6 +92,13 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
         GStorage.getSetting<int>(SettingsKeys.buttonSkipTime);
     playerArrowKeySkipTime =
         GStorage.getSetting<int>(SettingsKeys.arrowKeySkipTime);
+
+    // [my新增] 自动跳过片头片尾
+    autoSkipOpEd = GStorage.getSetting<bool>(SettingsKeys.autoSkipOpEd);
+    autoSkipOpManualSeconds =
+        GStorage.getSetting<int>(SettingsKeys.autoSkipOpManualSeconds);
+    autoSkipEdManualSeconds =
+        GStorage.getSetting<int>(SettingsKeys.autoSkipEdManualSeconds);
 
     playerControllerLayerDisappearTime = GStorage.getSetting<int>(
         SettingsKeys.playerControllerLayerDisappearTime);
@@ -154,8 +165,26 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
     });
   }
 
-  Future<void> updateButtonSkipTime() async {
-    final int? newButtonSkipTime = await _showSkipTimeChangeDialog(
+  /// [my新增] 片头/片尾手动跳过秒数 (复用快进时长数字输入对话框)
+  Future<void> _updateSkipSeconds({required bool isOp}) async {
+    final current = isOp ? autoSkipOpManualSeconds : autoSkipEdManualSeconds;
+    final newValue = await _showSkipTimeChangeDialog(
+      title: isOp ? '片头手动跳过秒数' : '片尾手动跳过秒数',
+      initialValue: current.toString(),
+    );
+    if (newValue == null) return;
+    if (isOp) {
+      await GStorage.putSetting<int>(
+          SettingsKeys.autoSkipOpManualSeconds, newValue);
+      setState(() => autoSkipOpManualSeconds = newValue);
+    } else {
+      await GStorage.putSetting<int>(
+          SettingsKeys.autoSkipEdManualSeconds, newValue);
+      setState(() => autoSkipEdManualSeconds = newValue);
+    }
+  }
+
+  Future<void> updateButtonSkipTime() async {    final int? newButtonSkipTime = await _showSkipTimeChangeDialog(
         title: '顶部按钮快进时长', initialValue: playerButtonSkipTime.toString());
 
     if (newButtonSkipTime != null &&
@@ -345,6 +374,35 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                 title: Text('自动连播'),
                 description: Text('当前视频播放完毕后自动播放下一集'),
                 initialValue: autoPlayNext,
+              ),
+              // [my新增] 自动跳过片头片尾: 社区数据 (aniskip) 优先, 无数据
+              // 回退手动秒数 (0 = 不跳)
+              SettingsTile.switchTile(
+                leading: Icons.skip_next_rounded,
+                onToggle: (value) async {
+                  autoSkipOpEd = value ?? !autoSkipOpEd;
+                  await GStorage.putSetting<bool>(
+                      SettingsKeys.autoSkipOpEd, autoSkipOpEd);
+                  setState(() {});
+                },
+                title: Text('自动跳过片头片尾'),
+                description:
+                    Text('播放到社区数据的片头/片尾区间时自动跳过 (Syncplay 会话中不生效)'),
+                initialValue: autoSkipOpEd,
+              ),
+              SettingsTile(
+                leading: Icons.slow_motion_video_rounded,
+                onPressed: (_) => _updateSkipSeconds(isOp: true),
+                title: Text('片头手动跳过秒数'),
+                description: Text('无社区数据时自动跳过开头 N 秒 (当前: '
+                    '$autoSkipOpManualSeconds 秒, 0 为不跳)'),
+              ),
+              SettingsTile(
+                leading: Icons.fast_forward_rounded,
+                onPressed: (_) => _updateSkipSeconds(isOp: false),
+                title: Text('片尾手动跳过秒数'),
+                description: Text('无社区数据时跳过结尾 N 秒 (当前: '
+                    '$autoSkipEdManualSeconds 秒, 0 为不跳)'),
               ),
               if (Platform.isAndroid)
                 SettingsTile.switchTile(

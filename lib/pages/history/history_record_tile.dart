@@ -4,6 +4,7 @@ import 'package:kazumi/bean/widget/kazumi_menu.dart';
 import 'package:kazumi/bean/widget/loading_indicator.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/modules/history/history_module.dart';
+import 'package:kazumi/pages/direct_search/series_detector.dart';
 import 'package:kazumi/utils/constants.dart';
 
 class HistoryRecordTile extends StatelessWidget {
@@ -48,6 +49,8 @@ class HistoryRecordTile extends StatelessWidget {
     final title = history.bangumiItem.nameCn.isEmpty
         ? history.bangumiItem.name
         : history.bangumiItem.nameCn;
+    // [my新增] 显示层剥裸尾数字 + 集数角标 (方案一 b), 语义层用原名
+    final (displayTitle, episodeNo) = SeriesDetector.displayNameParts(title);
     final episode = history.lastWatchEpisodeName.isEmpty
         ? '第 ${history.lastWatchEpisode} 话'
         : history.lastWatchEpisodeName;
@@ -113,11 +116,21 @@ class HistoryRecordTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Text.rich(
+                      TextSpan(text: displayTitle, children: [
+                        TextSpan(
+                          text: episodeNo == null ? '' : '  $episodeNo',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ]),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
                     const SizedBox(height: 6),
                     Text(episode,
                         maxLines: 1,

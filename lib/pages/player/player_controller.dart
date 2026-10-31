@@ -193,6 +193,8 @@ class PlayerController implements Disposable {
     playback.buttonSkipTime = GStorage.getSetting(SettingsKeys.buttonSkipTime);
     playback.arrowKeySkipTime =
         GStorage.getSetting(SettingsKeys.arrowKeySkipTime);
+    // [my新增] 自动跳过片头片尾开关初值 (面板行/设置页共用)
+    playback.autoSkipOpEd = GStorage.getSetting(SettingsKeys.autoSkipOpEd);
     try {
       await _releasePlaybackResources();
     } catch (_) {}

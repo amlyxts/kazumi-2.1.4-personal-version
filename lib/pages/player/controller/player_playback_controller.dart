@@ -192,6 +192,18 @@ abstract class _PlayerPlaybackController with Store {
     }
   }
 
+  /// [my新增] 自动跳过片头片尾总开关 (面板行与设置页共用; 秒数设置只在
+  /// 判定时读框, 不进 observable)
+  @observable
+  bool autoSkipOpEd = false;
+
+  @action
+  void setAutoSkipOpEd(bool value) {
+    autoSkipOpEd = value;
+    GStorage.putSetting(SettingsKeys.autoSkipOpEd, value);
+  }
+
+
   bool get playerCompleted {
     try {
       return mediaPlayer?.state.completed ?? false;

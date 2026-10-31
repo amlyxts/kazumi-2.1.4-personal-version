@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 
+import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
 import 'package:kazumi/bean/settings/settings_list.dart';
 import 'package:kazumi/bean/widget/state_presentation.dart';
@@ -76,6 +77,45 @@ class _WebDavSyncPageState extends State<WebDavSyncPage> {
         await widget.danmakuShieldSync.sync();
         _message = '弹幕屏蔽词已同步';
       });
+
+  /// [my新增] 修复旧版同步 bug 造成的分区错乱: 合并云端 → 迁回误记
+  /// 为表番的源直连条目 → 以本地为准重建云端快照。
+  Future<void> _repairCollectSections() async {
+    final confirmed = await KazumiDialog.show<bool>(
+      builder: (context) => AlertDialog(
+        title: const Text('修复收藏分区并重建云快照'),
+        content: const Text(
+          '将先合并云端收藏到本地, 把被旧版同步误记为表番的源直连条目'
+          '迁回里番区, 然后以本地为准覆盖云端收藏快照。\n\n'
+          '用于修复“里番跑进追番 / 里番收藏清空”的问题。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('开始修复'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _run(() async {
+      final webDav = WebDav();
+      if (!webDav.initialized) {
+        await webDav.init();
+      } else {
+        await webDav.ping();
+      }
+      if (mounted) setState(() => _message = '正在合并云端收藏…');
+      final count = await webDav.repairCollectSectionsAndRebuildSnapshot();
+      _message = count > 0
+          ? '已迁回 $count 条并重建云快照'
+          : '未发现误迁移条目，云快照已按本地重建';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -193,6 +233,21 @@ class _WebDavSyncPageState extends State<WebDavSyncPage> {
                         value ?? !settingsSync);
                     if (mounted) setState(() {});
                   },
+                ),
+              ],
+            ),
+            SettingsSection(
+              title: const Text('维护'),
+              margin: EdgeInsets.zero,
+              tiles: [
+                SettingsTile(
+                  leading: Icons.healing_rounded,
+                  title: const Text('修复收藏分区并重建云快照'),
+                  description: const Text(
+                      '把误记为表番的源直连条目迁回里番区，再以本地为准覆盖云端收藏'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  enabled: enabled && collect && !_busy,
+                  onPressed: (_) => _repairCollectSections(),
                 ),
               ],
             ),

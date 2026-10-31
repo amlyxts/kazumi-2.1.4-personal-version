@@ -5,6 +5,7 @@
 // 元素定位)。
 // 播放: 取集 → 伪 bangumi 条目 (md5 稳定 id, 与本地视频模式同构)。
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,8 +16,12 @@ import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/dialog/dialog_task.dart';
 import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
+import 'package:kazumi/modules/collect/collect_module.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+import 'package:kazumi/modules/roads/road_module.dart';
+import 'package:kazumi/pages/direct_search/series_detector.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
@@ -27,10 +32,8 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
-import 'package:crypto/crypto.dart' as crypto;
 import 'package:html/parser.dart' as html_parser;
 import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 class _BrowseCard {
   _BrowseCard({required this.title, required this.href, required this.thumb});
@@ -86,16 +89,9 @@ class _ListPage {
       );
 }
 
-class _BangumiRef {
-  _BangumiRef({
-    required this.subjectId,
-    required this.score,
-    required this.votes,
-  });
-  final String subjectId;
-  final double score;
-  final String votes;
-}
+// [my移除 2026-10-31] bgm 自动匹配 (_BangumiRef/_queryBangumiRefs) 与手动
+// 认领 (_showClaimSearch/directSearchClaims) 已下线, 代码备份:
+// ../../../../直连Bangumi匹配与认领_备份_20261031.dart.txt
 
 class DirectSearchPage extends StatefulWidget {
   const DirectSearchPage({super.key});
@@ -111,6 +107,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   /// 已收藏条目 (按条目 id), 控制卡片收藏星标状态
   final Set<int> _collectedIds = {};
+
+  /// [my新增] 已收藏的系列名集合 (里番区直连条目), 星标按作品匹配用 —
+  /// 同系列其他集无需再逐集收藏
+  final Set<String> _collectedSeriesNames = {};
 
   /// 浏览目标站点首页 (卡片结构解析基准), 站名在设置里配置不写入代码。
   String get _siteBase {
@@ -169,13 +169,16 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   /// 静态字段是唯一跨重建存活的状态 — 回到源搜索时从上次页码继续。
   static int _rememberedPage = 1;
 
-  // Bangumi 里番评分匹配 (搜索关键词模式)
-  final Map<String, _BangumiRef> _bangumiRefs = {};
+  /// [my新增] 搜索关键词 (静态跨重建存活, 与 _rememberedPage 配套):
+  /// 非空 = 搜索模式, 列表 URL 与翻页统一带 query; 空串 = 普通浏览。
+  /// 换分区/标签/源时清空退出搜索。
+  static String _rememberedKeyword = '';
 
-  /// 手动认领 (卡片 href → {id, score, votes}): 自动匹配漏网时手动绑定
-  /// bgm 条目, JSON 落设置框; 查找优先级高于自动匹配。
-  Map<String, Map<String, dynamic>> _claims = {};
-  bool _bangumiQuerying = false;
+  /// [my新增] 站内搜索历史 (新在前, 上限 _historyMax): JSON 落设置框,
+  /// 供输入框下拉回填; 只留本地不参与云同步, 与主搜索页 Bangumi 历史分开。
+  static const int _historyMax = 20;
+  List<String> _keywordHistory = [];
+  final FocusNode _keywordFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -199,53 +202,55 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     _genre = _rememberedGenre;
     _activeTags.addAll(_rememberedTags);
     _page = _rememberedPage;
-    _loadClaims();
+    _loadKeywordHistory();
     _collectController.loadCollectibles();
-    _collectedIds.addAll(
-        _collectController.collectibles.map((c) => c.bangumiItem.id));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    _refreshCollectedState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       // [my修复] 初始加载带记忆页码 — 原先 initState 恢复 _page 后,
       // 这里仍按默认 page:1 加载并回写, 记忆等于白恢复
-      _loadList(reset: true, page: _rememberedPage > 1 ? _rememberedPage : 1);
-      // [my提速] 预取先行: 与当前页加载并行 (不等它完成), 批量拉相邻页
-      // — 进页后用户第一次翻页大概率命中缓存
-      final startPage = _rememberedPage > 1 ? _rememberedPage : 1;
-      _prefetchBatch([
-        _listUrlForPage(startPage),
-        _listUrlForPage(startPage + 1),
-        if (startPage > 1) _listUrlForPage(startPage - 1),
-      ]);
+      final firstPage = _rememberedPage > 1 ? _rememberedPage : 1;
+      final firstUrl = _listUrlForPage(firstPage);
+      // [my提速] 预热未完成且目标页无缓存时, 先等预热 (免进页撞上
+      // 冷启动求解); 有缓存时直接上屏, 预热在后台并行
+      if (_pageCache[firstUrl] == null) {
+        try {
+          await FlareSolverrService.warmupFuture;
+        } catch (_) {}
+      }
+      _loadList(reset: true, page: firstPage);
+      // [my提速] 预取先行: 与当前页加载并行 (不等它完成), 预取相邻页
+      // — 进页后用户第一次翻页大概率命中缓存 ([my调整] 经节流队列错峰)
+      _enqueuePrefetch(firstUrl);
+      _enqueuePrefetch(_listUrlForPage(firstPage + 1));
+      if (firstPage > 1) _enqueuePrefetch(_listUrlForPage(firstPage - 1));
     });
   }
 
-  /// 归一化标题 (匹配用)
-  static String _normalizeTitle(String s) => s
-      .replaceAll(RegExp(r'[\s　·・~\-–—「」『』【】\[\]()（）]+'), '')
-      .toLowerCase();
-
-  static int _stableDirectId(String source) {
-    final hex = crypto.md5
-        .convert(utf8.encode('direct_search/$source'))
-        .toString();
-    return int.parse(hex.substring(0, 7), radix: 16);
+  @override
+  void dispose() {
+    _keywordFocusNode.dispose();
+    super.dispose();
   }
 
-  /// 卡片的条目 id: 匹配 bgm 条目时使用真实条目 id (收藏/Bangumi 同步走
-  /// 真实条目), 未匹配时用稳定哈希 id (本地条目)。
+  /// 归一化标题 (匹配用)
+  static int _stableDirectId(String source) =>
+      // [my修改] 委托 SeriesDetector 统一算法 (收藏/播放/打开三处同源)
+      SeriesDetector.stableDirectId(source);
+
+  /// 卡片的条目 id: 恒为稳定哈希 (本地条目)。[my移除 2026-10-31] 原"匹配
+  /// bgm 用真实条目 id"分支随自动匹配/认领功能下线 (备份见文件头注释);
+  /// 既有 real-id 收藏不受影响 (isDirectSourceItem 凭 info 判定)。
   int _itemIdFor(_BrowseCard card) {
-    final ref = _refFor(card);
     final pluginName = _selectedPlugin?.name ?? 'direct';
-    if (ref != null) {
-      final realId = int.tryParse(ref.subjectId);
-      if (realId != null) return realId;
-    }
     return _stableDirectId('${pluginName}_${card.href}');
   }
 
   BangumiItem _fabricatedItem(_BrowseCard card) {
-    final name = card.title.trim();
+    // [my升级] 条目命名清洗 (方案一): 只剥带明确量词的集数标记
+    // (第N话/前後編/PART/【N】等), 不动裸尾数字与标题本体的数字;
+    // 系列/单集条目命名风格统一, 时间表/历史跟着干净
+    final name = SeriesDetector.namingName(card.title);
     final id = _itemIdFor(card);
-    final ref = _refFor(card);
     return BangumiItem(
       id: id,
       type: 2,
@@ -260,7 +265,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       },
       tags: [],
       alias: [],
-      ratingScore: ref?.score ?? 0.0,
+      ratingScore: 0.0,
       votes: 0,
       votesCount: [],
       // [my新增] 直连条目的播放地址随收藏落库 (WebDAV), 里番收藏页
@@ -290,55 +295,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     return _parseCards(body);
   }
 
-  /// [my提速] 批量取数: 一次 curl 进程 --next 连发多个 URL, 进程内
-  /// 复用 TLS 连接 (热点实测: 首请求 3.1-3.5s, 复用后 1.2-1.5s, 省 60%)。
-  /// 返回与 urls 顺序对应的解析结果; 单个失败该位为 null。
-  Future<List<_ListPage?>> _fetchBatch(List<String> urls) async {
-    if (urls.isEmpty) return const [];
-    if (_fsCookies == null) return List.filled(urls.length, null);
-    final exe = _curlExe;
-    if (exe == null) return List.filled(urls.length, null);
-    try {
-      final proxy =
-          NetworkConfig.fromSettings().proxyForUri(Uri.parse(urls.first));
-      final ua = _fsUA ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
-      final args = <String>[];
-      for (var i = 0; i < urls.length; i++) {
-        if (i > 0) args.add('--next');
-        args.addAll([
-          '-s',
-          '--max-time',
-          '25',
-          if (proxy != null) ...['-x', 'http://${proxy.host}:${proxy.port}'],
-          '-A',
-          ua,
-          '-H',
-          'Cookie: ${_fsCookies!}',
-          urls[i],
-        ]);
-      }
-      final r = await Process.run(exe, args,
-          stdoutEncoding: utf8, stderrEncoding: utf8);
-      final body = r.stdout.toString();
-      if (r.exitCode != 0 || body.isEmpty) {
-        KazumiLogger().w(
-            'DirectSearch: batch fetch null | exit=${r.exitCode} len=${body.length}');
-        return List.filled(urls.length, null);
-      }
-      // curl 各 URL 的响应体按顺序首尾相连 — 用分页特征切分不可靠,
-      // 改为逐段解析: 以 _parseCards 能独立切出的边界未知, 故批内只
-      // 取"第一个成功解析的结果"对应首 URL, 其余走单发。
-      // (实测: 批量主要用于预热, 首页解析成功即已达成连接复用收益)
-      final first = _consumeListBody(body);
-      final results = List<_ListPage?>.filled(urls.length, null);
-      results[0] = first;
-      return results;
-    } catch (e) {
-      KazumiLogger().w('DirectSearch: batch fetch error: $e');
-      return List.filled(urls.length, null);
-    }
-  }
-
   String? get _curlExe {
     final root = Platform.environment['SystemRoot'] ?? r'C:\Windows';
     final exe = '$root\\System32\\curl.exe';
@@ -350,34 +306,35 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     final exe = _curlExe;
     if (exe == null) return null;
     try {
-      final proxy =
-          NetworkConfig.fromSettings().proxyForUri(Uri.parse(url));
       // [my修复] 不带 --compressed: Win10 内置 curl 8.4.0 (Schannel) 不支持
       // 该参数, 直接 exit 2 空输出, 快速通道上线以来从未真正生效过。
+      // [my优化] 参数拼装走 FlareSolverrService.buildCurlArgs 共享构造
+      final sw = Stopwatch()..start();
       final r = await Process.run(
         exe,
-        [
-          '-s',
-          '--max-time',
-          '20',
-          if (proxy != null) ...['-x', 'http://${proxy.host}:${proxy.port}'],
-          '-A',
-          _fsUA ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          '-H',
-          'Cookie: ${_fsCookies!}',
-          url,
-        ],
+        FlareSolverrService.buildCurlArgs(
+          url: url,
+          cookies: _fsCookies!,
+          userAgent: _fsUA ?? '',
+          extra: const ['--max-time', '20'],
+        ),
         stdoutEncoding: utf8,
         stderrEncoding: utf8,
       );
+      final elapsed = sw.elapsedMilliseconds;
       final body = r.stdout.toString();
       final page = _consumeListBody(body);
       if (page != null) {
-        KazumiLogger().i(
-            'DirectSearch: curl fast path ok, ${page.cards.length} cards');
+        if (elapsed > 1500) {
+          KazumiLogger().w(
+              'DirectSearch: curl fast path SLOW ${elapsed}ms, ${page.cards.length} cards');
+        } else {
+          KazumiLogger().i(
+              'DirectSearch: curl fast path ok, ${page.cards.length} cards, ${elapsed}ms');
+        }
       } else {
         KazumiLogger().w(
-            'DirectSearch: curl fast path null | exit=${r.exitCode} len=${body.length} challenge=${body.contains('challenge-platform')} stderr=${r.stderr.toString().trim()}');
+            'DirectSearch: curl fast path null | ${elapsed}ms exit=${r.exitCode} len=${body.length} challenge=${body.contains('challenge-platform')} stderr=${r.stderr.toString().trim()}');
       }
       return page;
     } catch (e) {
@@ -545,11 +502,21 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   String _lastFetchedUrl = '';
 
-  /// 构建当前列表 URL: 分区与标签可同时生效 (站点原生支持组合参数)
-  String _listUrlFor() => _urlForGenre(_genre);
+  /// 构建当前列表 URL: 搜索模式 (关键词非空) 带 query, 与浏览共用翻页
+  /// 状态机 (修复搜索后翻页/跳页丢失搜索条件)
+  String _listUrlFor() {
+    final params = <String>[
+      if (_rememberedKeyword.isNotEmpty)
+        'query=${Uri.encodeComponent(_rememberedKeyword)}',
+      ..._scopeParams(_genre),
+    ];
+    if (params.isEmpty) return '$_siteBase/search';
+    return '$_siteBase/search?${params.join('&')}';
+  }
 
-  /// 指定分区的列表 URL (悬停预取用, 不动当前状态)
-  String _urlForGenre(String genre) {
+  /// [my修改] 分区/标签查询参数 (浏览与搜索共用, 站点原生支持组合):
+  /// 标签在前、分区在后; '最新' 分区无参
+  List<String> _scopeParams(String genre) {
     final params = <String>[];
     if (_activeTags.isNotEmpty) {
       params.addAll(_activeTags
@@ -558,6 +525,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (genre != '最新') {
       params.add('genre=${Uri.encodeComponent(genre)}');
     }
+    return params;
+  }
+
+  /// 指定分区的列表 URL (悬停预取用, 不动当前状态)
+  String _urlForGenre(String genre) {
+    final params = _scopeParams(genre);
     if (params.isEmpty) return '$_siteBase/search';
     return '$_siteBase/search?${params.join('&')}';
   }
@@ -652,52 +625,63 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
+  // [my修复] 后台预取节流队列: CF 按 burst 触发重挑战 (实测 6 连发窗口内
+  // 分类页全被挑, 11:59 复发), 预取统一入静态队列 + 600ms 间隔错峰;
+  // 用户触发的加载不排队 (只管预取流量)。
+  static final Queue<String> _prefetchQueue = Queue();
+  static final Set<String> _prefetchQueued = {};
+  static bool _prefetchDraining = false;
+  static DateTime _prefetchLastRun =
+      DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _enqueuePrefetch(String url) {
+    if (_pageCache.containsKey(url) ||
+        _prefetchInflight.contains(url) ||
+        _prefetchQueued.contains(url)) {
+      return;
+    }
+    _prefetchQueued.add(url);
+    _prefetchQueue.add(url);
+    _drainPrefetchQueue();
+  }
+
+  void _drainPrefetchQueue() {
+    if (_prefetchDraining) return;
+    _prefetchDraining = true;
+    unawaited(() async {
+      try {
+        while (_prefetchQueue.isNotEmpty) {
+          final wait =
+              const Duration(milliseconds: 600) -
+                  DateTime.now().difference(_prefetchLastRun);
+          if (wait > Duration.zero) {
+            await Future.delayed(wait);
+          }
+          if (_prefetchQueue.isEmpty) break;
+          final url = _prefetchQueue.removeFirst();
+          _prefetchQueued.remove(url);
+          _prefetchLastRun = DateTime.now();
+          await _prefetch(url);
+        }
+      } finally {
+        _prefetchDraining = false;
+      }
+    }());
+  }
+
   /// [my新增] 批量预取: 未缓存的 URL 合并进一次 curl 进程 (--next 连发,
   /// 复用 TLS 连接, 热点实测后继请求省 ~60%)。首页结果入缓存; 其余 URL
   /// 各自单发补齐 (批内切分不可靠, 但连接已复用 — 单发走的是已热身的
   /// 代理通道, 代价小)。全部失败静默。
-  Future<void> _prefetchBatch(List<String> urls) async {
-    final todo = urls
-        .where((u) => !_pageCache.containsKey(u) && !_prefetchInflight.contains(u))
-        .toList();
-    if (todo.isEmpty) return;
-    for (final u in todo) {
-      _prefetchInflight.add(u);
-    }
-    try {
-      final results = await _fetchBatch(todo);
-      // 首位结果入缓存 (连接复用的主收益)
-      final first = results.isNotEmpty ? results[0] : null;
-      if (first != null && first.cards.isNotEmpty) {
-        _cachePut(todo[0], first);
-        if (mounted) {
-          for (final c in first.cards.take(12)) {
-            if (c.thumb.isEmpty) continue;
-            precacheImage(CachedNetworkImageProvider(c.thumb), context);
-          }
-        }
-      }
-    } catch (_) {
-    } finally {
-      for (final u in todo) {
-        _prefetchInflight.remove(u);
-      }
-    }
-  }
-
   /// [my新增] 双向预取: N+1 与 N-1 (往回翻也秒开)。
   /// N-1 用当前已知页码直接构造 (页码存在即合法); N+1 需 _nextPage 确认
-  /// 有下一页 (末页置灰逻辑同款)。
+  /// 有下一页 (末页置灰逻辑同款)。[my调整] 经节流队列错峰出队。
   void _prefetchNeighbors(int page) {
-    final urls = <String>[];
     if (_nextPage != null && _nextPage! > page) {
-      urls.add(_listUrlForPage(page + 1));
+      _enqueuePrefetch(_listUrlForPage(page + 1));
     }
     if (page > 1) {
-      urls.add(_listUrlForPage(page - 1));
-    }
-    if (urls.isNotEmpty) {
-      _prefetchBatch(urls);
+      _enqueuePrefetch(_listUrlForPage(page - 1));
     }
   }
 
@@ -730,8 +714,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     _hoverDebounce = Timer(const Duration(milliseconds: 200), () {
       if (genre == _genre || _loading || _siteBase.isEmpty) return;
       final base = _urlForGenre(genre);
-      _prefetch(base);
-      _prefetch('$base&page=2');
+      // [my调整] 经节流队列错峰 (原直发 2 请求叠加翻页预取即成 burst)
+      _enqueuePrefetch(base);
+      _enqueuePrefetch('$base&page=2');
     });
   }
 
@@ -751,7 +736,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         _error = null;
         _cards = cached.cards;
         _nextPage = cached.nextPage;
-        _lastPage = cached.lastPage ?? _lastPage;
+        // [my修复] reset (换范围/新搜索) 时不残留旧范围的总页数:
+        // 无翻页条 = 单页 (该站 >1 页必有翻页条)
+        _lastPage = cached.lastPage ?? (reset ? 1 : _lastPage);
         _page = page;
       });
       _refreshInBackground(url);
@@ -778,7 +765,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       } else {
         _cards = listPage.cards;
         _nextPage = listPage.nextPage;
-        _lastPage = listPage.lastPage ?? _lastPage;
+        // [my修复] reset (换范围/新搜索) 时旧 _lastPage 不残留 — 单页
+        // 结果的搜索页无翻页条, 原实现 `?? _lastPage` 会显示上一范围的
+        // 总页数 (分区 79 页 / 搜索 1 页)。无条 = 单页 (空结果除外);
+        // 翻页中保留旧值兜底 (翻页条滑窗抖动)
+        _lastPage = listPage.lastPage ??
+            (reset ? (_cards.isNotEmpty ? 1 : null) : _lastPage);
         _page = page;
         _rememberedPage = page;
       }
@@ -787,6 +779,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     if (listPage != null && listPage.cards.isNotEmpty) {
       _cachePut(url, listPage);
       _prefetchNeighbors(page);
+    }
+    // [my新增] 搜索模式收尾: 首页记录搜索历史 (普通浏览跳过)。
+    // [my移除 2026-10-31] 原 Bangumi 评分匹配调用随功能下线 (备份见文件头)
+    if (listPage != null && _rememberedKeyword.isNotEmpty) {
+      if (page == 1) await _recordKeywordHistory(_rememberedKeyword);
     }
   }
 
@@ -852,282 +849,125 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   // ====== 搜索模式 (站内关键词, 走同一卡片解析) ======
 
+  /// 站内搜索: 关键词入静态状态机, 统一走 _loadList — 翻页/跳页/页缓存/
+  /// SWR/双向预取与浏览共用同一套机制 (修复搜索后翻页不带 query)。
+  /// 空关键词提交 = 退出搜索回普通浏览。
   Future<void> _search() async {
     final keyword = _keywordController.text.trim();
-    if (keyword.isEmpty || _loading) return;
+    if (_loading) return;
+    if (keyword.isEmpty && _rememberedKeyword.isEmpty) return;
     setState(() {
-      _loading = true;
-      _error = null;
-      _bangumiRefs.clear();
+      _rememberedKeyword = keyword;
     });
-    final url =
-        '$_siteBase/search?query=${Uri.encodeComponent(keyword)}';
-    final listPage = await _fetchList(url);
-    if (!mounted) return;
-    setState(() {
-      _loading = false;
-      _cards = listPage?.cards ?? [];
-      if (listPage == null) {
-        _error = '加载失败 (过盾失败或站点不可达), 请重试';
-      }
-    });
-    if (listPage != null && listPage.cards.isNotEmpty) {
-      await _queryBangumiRefs(keyword);
-    }
+    await _loadList(reset: true);
   }
 
-  /// 带 Bangumi 令牌的里番条目检索 (filter nsfw=true), 按归一化标题匹配
-  Future<void> _queryBangumiRefs(String keyword) async {
-    final token = GStorage.getSetting(SettingsKeys.bangumiAccessToken).trim();
-    if (token.isEmpty) return;
-    setState(() => _bangumiQuerying = true);
+  // ====== 站内搜索历史 (输入框下拉回填, 只留本地) ======
+
+  void _loadKeywordHistory() {
+    final raw =
+        GStorage.getSetting(SettingsKeys.directSearchKeywordHistory).trim();
+    if (raw.isEmpty) return;
     try {
-      final dio = Dio(BaseOptions(
-        connectTimeout: Duration(seconds: 15),
-        receiveTimeout: Duration(seconds: 20),
-        validateStatus: (_) => true,
-      ));
-      dio.options.headers = {
-        'user-agent': 'kazumi-direct-search/1.0 (bgm rating match)',
-        'authorization': 'Bearer $token',
-      };
-      final resp = await dio.post(
-        'https://api.bgm.tv/v0/search/subjects',
-        data: {'keyword': keyword, 'limit': 50, 'filter': {'nsfw': true}},
-      );
-      final data = resp.data['data'] as List? ?? [];
-      if (!mounted) return;
-      setState(() {
-        for (final subject in data) {
-          final name = (subject['name'] ?? '').toString();
-          final rating = subject['rating'] ?? {};
-          _bangumiRefs[_normalizeTitle(name)] = _BangumiRef(
-            subjectId: (subject['id'] ?? 0).toString(),
-            score: (rating['score'] as num?)?.toDouble() ?? 0,
-            votes: (rating['total'] ?? 0).toString(),
-          );
-        }
-        _bangumiQuerying = false;
-      });
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        _keywordHistory = decoded
+            .map((e) => e.toString())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
     } catch (e) {
-      KazumiLogger().i('DirectSearch: bangumi nsfw query failed: $e');
-      if (mounted) setState(() => _bangumiQuerying = false);
+      KazumiLogger().w('DirectSearch: parse keyword history failed: $e');
     }
   }
 
-  _BangumiRef? _refFor(_BrowseCard card) {
-    // 手动认领优先: 绑定关系持久, 自动匹配是会话级的
-    final claim = _claims[card.href];
-    if (claim != null) {
-      return _BangumiRef(
-        subjectId: (claim['id'] ?? '').toString(),
-        score: (claim['score'] as num?)?.toDouble() ?? 0,
-        votes: (claim['votes'] ?? '').toString(),
-      );
+  /// 记录一次成功提交: 去重置顶 (大小写不敏感), 超上限裁掉最旧
+  Future<void> _recordKeywordHistory(String keyword) async {
+    final folded = keyword.toLowerCase();
+    _keywordHistory
+      ..removeWhere((e) => e.toLowerCase() == folded)
+      ..insert(0, keyword);
+    if (_keywordHistory.length > _historyMax) {
+      _keywordHistory.removeRange(_historyMax, _keywordHistory.length);
     }
-    final key = _normalizeTitle(card.title);
-    if (_bangumiRefs.containsKey(key)) return _bangumiRefs[key];
-    for (final e in _bangumiRefs.entries) {
-      if (e.key.isEmpty) continue;
-      if (key.contains(e.key) || e.key.contains(key)) return e.value;
+    await GStorage.putSetting(
+        SettingsKeys.directSearchKeywordHistory, jsonEncode(_keywordHistory));
+  }
+
+  Future<void> _clearKeywordHistory() async {
+    setState(() => _keywordHistory = []);
+    await GStorage.putSetting(SettingsKeys.directSearchKeywordHistory, '');
+    // 收起下拉 (清空后无可展示项)
+    _keywordFocusNode.unfocus();
+  }
+
+
+  // ====== 收藏切换 (本地收藏 + Bangumi 同步按全局开关走) ======
+
+  /// [my新增] 重建收藏状态缓存: id 集合 + 系列名集合 (星标按作品匹配用)。
+  /// [my优化] 系列名存"剥除后"形态, 星标匹配走单侧剥除的快速通道
+  void _refreshCollectedState() {
+    final items = _collectController.collectibles;
+    _collectedIds
+      ..clear()
+      ..addAll(items.map((c) => c.bangumiItem.id));
+    _collectedSeriesNames
+      ..clear()
+      ..addAll([
+        for (final c in items)
+          if (c.section == 1 &&
+              CollectSectionRepair.isDirectSourceItem(c.bangumiItem))
+            SeriesDetector.stripEpisodeMarker(
+              (c.bangumiItem.nameCn.isNotEmpty
+                      ? c.bangumiItem.nameCn
+                      : c.bangumiItem.name)
+                  .trim(),
+            )
+      ].where((n) => n.length >= 2));
+  }
+
+  /// [my新增] 卡片是否已收藏: 精确 id 命中, 或标题按作品匹配到里番区
+  /// 系列条目 (同系列其他集自动亮星, 无需逐集收藏)
+  bool _isCardCollected(_BrowseCard card) {
+    if (_collectedIds.contains(_itemIdFor(card))) return true;
+    final title = card.title.trim();
+    if (title.length < 2) return false;
+    for (final name in _collectedSeriesNames) {
+      if (SeriesDetector.sameSeriesStripped(name, title)) return true;
+    }
+    return false;
+  }
+
+  /// [my新增] 卡片对应的既有收藏条目: 先按 id 精确找, 再按作品名匹配
+  /// (同系列其他集 → 命中系列条目, 弹窗预选其分类, 改分类/取消收藏
+  /// 都作用于整个作品)
+  CollectedBangumi? _collectedEntryFor(_BrowseCard card) {
+    final id = _itemIdFor(card);
+    for (final c in _collectController.collectibles) {
+      if (c.bangumiItem.id == id) return c;
+    }
+    final title = card.title.trim();
+    if (title.length < 2) return null;
+    for (final c in _collectController.collectibles) {
+      if (c.section != 1) continue;
+      if (!CollectSectionRepair.isDirectSourceItem(c.bangumiItem)) continue;
+      final name = c.bangumiItem.nameCn.isNotEmpty
+          ? c.bangumiItem.nameCn
+          : c.bangumiItem.name;
+      if (SeriesDetector.sameSeriesName(name, title)) return c;
     }
     return null;
   }
 
-  // ====== 手动认领 (自动匹配漏网的卡片手动绑定 bgm 条目) ======
-
-  void _loadClaims() {
-    final raw = GStorage.getSetting(SettingsKeys.directSearchClaims).trim();
-    if (raw.isEmpty) return;
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        _claims = decoded.map((k, v) =>
-            MapEntry(k.toString(), Map<String, dynamic>.from(v as Map)));
-      }
-    } catch (e) {
-      KazumiLogger().w('DirectSearch: parse claims failed: $e');
-    }
-  }
-
-  Future<void> _persistClaims() async {
-    await GStorage.putSetting(
-        SettingsKeys.directSearchClaims, jsonEncode(_claims));
-  }
-
-  Future<void> _setClaim(_BrowseCard card, Map<String, dynamic>? claim) async {
-    if (claim == null) {
-      _claims.remove(card.href);
-    } else {
-      _claims[card.href] = claim;
-    }
-    await _persistClaims();
-    if (mounted) setState(() {});
-  }
-
-  /// 认领检索: bgm v0 搜索 (含 nsfw), 选中即绑定; 已认领可解除。
-  Future<void> _showClaimSearch(_BrowseCard card) async {
-    final controller = TextEditingController(text: card.title);
-    List<Map<String, dynamic>> results = [];
-    var querying = false;
-    var searched = false;
-
-    Future<void> runSearch(
-        void Function(void Function()) setDialogState, String keyword) async {
-      final token =
-          GStorage.getSetting(SettingsKeys.bangumiAccessToken).trim();
-      if (token.isEmpty) {
-        KazumiDialog.showToast(message: '未配置 Bangumi 令牌, 无法检索');
-        return;
-      }
-      setDialogState(() => querying = true);
-      try {
-        final dio = Dio(BaseOptions(
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 20),
-          validateStatus: (_) => true,
-        ));
-        dio.options.headers = {
-          'user-agent': 'kazumi-direct-search/1.0 (bgm claim)',
-          'authorization': 'Bearer $token',
-        };
-        final resp = await dio.post(
-          'https://api.bgm.tv/v0/search/subjects',
-          data: {'keyword': keyword, 'limit': 20, 'filter': {'nsfw': true}},
-        );
-        final data = (resp.data['data'] as List? ?? [])
-            .whereType<Map>()
-            .map((s) => Map<String, dynamic>.from(s))
-            .toList();
-        setDialogState(() {
-          results = data;
-          querying = false;
-          searched = true;
-        });
-      } catch (e) {
-        KazumiLogger().i('DirectSearch: claim search failed: $e');
-        setDialogState(() => querying = false);
-        KazumiDialog.showToast(message: '检索失败');
-      }
-    }
-
-    await KazumiDialog.show(
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final current = _claims[card.href];
-          return AlertDialog(
-            title: Text('认领条目 — ${card.title}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 15)),
-            content: SizedBox(
-              width: 420,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (current != null)
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.link_off, size: 20),
-                      title: Text(
-                          '已认领 bgm #${current['id']} — 点击解除认领',
-                          style: const TextStyle(fontSize: 13)),
-                      onTap: () async {
-                        await _setClaim(card, null);
-                        KazumiDialog.dismiss();
-                      },
-                    ),
-                  Row(children: [
-                    Expanded(
-                      child: TextField(
-                        controller: controller,
-                        onSubmitted:
-                            (v) => runSearch(setDialogState, v),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.search),
-                      onPressed: () =>
-                          runSearch(setDialogState, controller.text),
-                    ),
-                  ]),
-                  const SizedBox(height: 8),
-                  Flexible(
-                    child: querying
-                        ? const Center(child: CircularProgressIndicator())
-                        : ListView(
-                            shrinkWrap: true,
-                            children: [
-                              for (final s in results)
-                                ListTile(
-                                  dense: true,
-                                  title: Text((s['name'] ?? '').toString(),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 13)),
-                                  subtitle: Text(
-                                      '${(s['nameCn'] ?? '').toString()}  ★${((s['rating'] ?? const {})['score'] ?? 0)}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style:
-                                          const TextStyle(fontSize: 11)),
-                                  onTap: () async {
-                                    final rating = s['rating'] ?? const {};
-                                    await _setClaim(card, {
-                                      'id': (s['id'] ?? 0).toString(),
-                                      'score':
-                                          (rating['score'] as num?) ?? 0,
-                                      'votes': (rating['total'] ?? 0)
-                                          .toString(),
-                                    });
-                                    KazumiDialog.dismiss();
-                                    KazumiDialog.showToast(
-                                        message: '已认领, 收藏将同步 Bangumi');
-                                  },
-                                ),
-                              if (results.isEmpty && searched)
-                                const ListTile(
-                                    dense: true,
-                                    title: Text('无结果',
-                                        style: TextStyle(fontSize: 13))),
-                            ],
-                          ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: KazumiDialog.dismiss,
-                child: Text('关闭',
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.outline)),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Future<void> _openBgmSubject(String subjectId) async {
-    final url = Uri.parse('https://bgm.tv/subject/$subjectId');
-    try {
-      await launchUrl(url, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      KazumiDialog.showToast(message: '无法打开浏览器');
-    }
-  }
-
-  // ====== 收藏切换 (本地收藏 + Bangumi 同步按全局开关走) ======
-
   /// 星标点击 → 分类选择弹窗 (用户自主判断分类; 已收藏可选取消收藏)
   Future<void> _showCollectTypePicker(_BrowseCard card) async {
-    final item = _fabricatedItem(card);
-    final wasCollected = _collectedIds.contains(item.id);
+    // [my修改] 星标按作品匹配: 命中系列条目时预选其分类, 取消收藏/
+    // 改分类都作用于整个作品
+    final matched = _collectedEntryFor(card);
+    final wasCollected = matched != null;
     // [my修复] 本地存储用 CollectType 语义 (1=在看 2=想看 4=看过), 与
     // Bangumi API 枚举 (1=想看 2=看过) 数值不同 — 之前传错枚举导致选项错位。
-    int? selectedType = wasCollected ? CollectType.watched.value : null;
+    int? selectedType = matched?.type;
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
@@ -1161,16 +1001,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                     dense: true,
                     onTap: () => setDialogState(() => selectedType = 0),
                   ),
-                if (_claims[card.href] == null && _refFor(card) == null)
-                  ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.inventory_2, size: 20),
-                    title: const Text('手动认领条目…',
-                        style: TextStyle(fontSize: 13)),
-                    subtitle: const Text('匹配 Bangumi 条目获取评分 (仅信息, 不同步)',
-                        style: TextStyle(fontSize: 11)),
-                    onTap: () => _showClaimSearch(card),
-                  ),
               ],
             ),
             actions: [
@@ -1184,32 +1014,20 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 onPressed: () {
                   final type = selectedType;
                   if (type == null) return;
+                  if (type == 0) {
+                    // [my修改] 命中系列条目时取消的是整个作品的收藏
+                    final delItem =
+                        matched?.bangumiItem ?? _fabricatedItem(card);
+                    _collectController.deleteCollectLocalOnly(delItem);
+                    setState(() => _refreshCollectedState());
+                    KazumiDialog.dismiss();
+                    KazumiDialog.showToast(message: '已取消收藏');
+                    return;
+                  }
                   // 弹窗打开期间可能刚完成认领, 条目 id 会从哈希变真实条目,
                   // 现取现用避免旧 id 进本地库
-                  final item = _fabricatedItem(card);
-                  // [my修复] type==0 (取消收藏) 此前被提前 return 拦死,
-                  // 从未生效; 现按有无 bgm 匹配走对应删除路径。
-                  // [my修改] 本页收藏一律入里番区 (section=1): 纯本地 +
-                  // WebDAV, 永不同步 Bangumi (整站成人内容, 表番账号保持
-                  // 干净); 认领仅用于评分/信息增强, 不触发同步
-                  if (type == 0) {
-                    _collectController.deleteCollectLocalOnly(item);
-                  } else {
-                    _collectController.addCollectLocalOnly(item,
-                        type: type, section: 1);
-                  }
-                  // [my修复] setState 刷新星标 + toast 反馈
-                  final label = CollectType.fromValue(type).label;
-                  setState(() {
-                    if (type == 0) {
-                      _collectedIds.remove(item.id);
-                    } else {
-                      _collectedIds.add(item.id);
-                    }
-                  });
                   KazumiDialog.dismiss();
-                  KazumiDialog.showToast(
-                      message: type == 0 ? '已取消收藏' : '已收藏 · $label');
+                  unawaited(_collectAsSeries(card, _fabricatedItem(card), type));
                 },
                 child: const Text('确定'),
               ),
@@ -1220,10 +1038,75 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     );
   }
 
+  /// [my新增] 收藏即作品 (混合方案, 依据 T1 实测): 先走现成取集链路
+  /// 拿观看页播放列表, 按"相邻标题公共前缀相似度"判定系列/单集 —
+  /// 系列作品: 条目锚点=列表中最老一集的链接 (列表新→旧, 旧集稳定;
+  /// 之后打开锚点页即全集, 新集自动出现), 名称=系列名, id=hash(源名+锚点)
+  /// → 同系列从任意一集收藏都归并到同一条目;
+  /// 单集/无系列特征/取集失败/已认领 bgm 条目: 退回旧行为 (info=卡片链接)。
+  /// 本页收藏一律入里番区 (section=1): 纯本地 + WebDAV, 永不同步 Bangumi。
+  Future<void> _collectAsSeries(
+      _BrowseCard card, BangumiItem baseItem, int type) async {
+    if (dialogs.isRunning) return;
+    await dialogs.run((task) async {
+      BangumiItem item = baseItem;
+      var note = '';
+      var stored = false;
+      final plugin = _selectedPlugin;
+      if (plugin != null) {
+        List<Road> roads = const [];
+        try {
+          roads = await task.loading(
+            message: '正在解析作品集数',
+            barrierDismissible: isDesktop(),
+            action: () => plugin.queryChapterRoads(card.href),
+          );
+        } catch (error) {
+          KazumiLogger().w('DirectSearch: collect roads failed', error: error);
+        }
+        // [my优化·抽取] 判定+构造+落库+合并走共享 upgradeToSeries
+        // (created: 帮手内已落库并合并; 否则原条目在方法末尾统一落库)
+        final (status, upgradedItem, mergedCount) =
+            await SeriesDetector.upgradeToSeries(
+          pluginName: plugin.name,
+          item: item,
+          roads: roads,
+          type: type,
+          add: (it, t) => _collectController.addCollectLocalOnly(it,
+              type: t, section: 1),
+          delete: (it) => _collectController.deleteCollectLocalOnly(it),
+          all: _collectController.collectibles,
+        );
+        if (status == SeriesDetector.seriesUpgradeCreated) {
+          item = upgradedItem;
+          stored = true;
+          note = ' · 已按作品聚合';
+          if (mergedCount > 0) note = '$note，合并旧收藏$mergedCount条';
+        }
+      }
+      if (!stored) {
+        await _collectController.addCollectLocalOnly(item,
+            type: type, section: 1);
+      }
+      if (!mounted) return;
+      setState(() => _refreshCollectedState());
+      KazumiDialog.showToast(
+          message: '已收藏 · ${CollectType.fromValue(type).label}$note');
+    }, onError: (error, stackTrace) {
+      KazumiLogger().w('DirectSearch: collect-as-series failed',
+          error: error);
+      KazumiDialog.showToast(message: '收藏失败，请重试');
+    });
+  }
+
   // ====== 播放 (卡片 → 取集 → 播放页) ======
 
   /// [my新增] 公共播放入口 (源搜索卡片与里番收藏页共用):
   /// 取线路 → 跳播放页。src = 播放页地址。
+  ///
+  /// 系列播放聚合: 判定为系列作品时, 播放条目改用系列锚点 id (与收藏聚合
+  /// 一致 → 播放页凭历史恢复"上次访问的集数", 时间表按作品归一), 无历史时
+  /// 从第一集 (列表最老一集) 开始。
   Future<void> playViaPlugin({
     required Plugin plugin,
     required String title,
@@ -1240,15 +1123,38 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       if (roads.isEmpty) {
         throw Exception('未获取到播放线路');
       }
+      var playItem = item;
+      var playTitle = title;
+      var playSrc = src;
+      int? startEpisode;
+      var startRoad = 0;
+      final detected = SeriesDetector.detect(roads);
+      if (detected.isSeries) {
+        playItem = SeriesDetector.buildSeriesItem(
+            _stableDirectId('${plugin.name}_${detected.anchorUrl}'),
+            detected,
+            item);
+        playTitle = detected.seriesName;
+        playSrc = detected.anchorUrl;
+        final roadIndex =
+            roads.indexWhere((r) => r.data.contains(detected.anchorUrl));
+        if (roadIndex >= 0) {
+          startRoad = roadIndex;
+          startEpisode =
+              roads[roadIndex].data.lastIndexOf(detected.anchorUrl) + 1;
+        }
+      }
       if (mounted) {
         task.withContext((context) => context.pushNamed(
               '/video/',
               arguments: OnlineVideoPlaybackArgs(
-                bangumiItem: item,
+                bangumiItem: playItem,
                 plugin: plugin,
-                title: title,
-                src: src,
+                title: playTitle,
+                src: playSrc,
                 roads: roads,
+                startEpisode: startEpisode,
+                startRoad: startRoad,
               ),
             ));
       }
@@ -1343,6 +1249,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                                       _rememberedTags
                                         ..clear()
                                         ..addAll(selected);
+                                      _rememberedKeyword = ''; // 换标签退出搜索
                                       _loadList(reset: true);
                                     },
                                   ),
@@ -1386,6 +1293,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     _rememberedTags
       ..clear()
       ..addAll(selected);
+    _rememberedKeyword = ''; // 换标签退出搜索
     await _loadList(reset: true);
   }
 
@@ -1417,6 +1325,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                         _activeTags.clear();
                         _rememberedPlugin = p;
                         _rememberedTags.clear();
+                        _rememberedKeyword = ''; // 换源退出搜索
                       });
                       _loadList(reset: true);
                     },
@@ -1426,12 +1335,83 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 const SizedBox(width: 12),
                 Expanded(
                   flex: 3,
-                  child: TextField(
-                    controller: _keywordController,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => _search(),
-                    decoration:
-                        const InputDecoration(hintText: '站内搜索关键词'),
+                  // [my新增] 搜索历史下拉: SDK RawAutocomplete, 外部注入
+                  // controller/focusNode (_search 与搜索按钮仍读原 controller)
+                  child: RawAutocomplete<String>(
+                    textEditingController: _keywordController,
+                    focusNode: _keywordFocusNode,
+                    // 框获焦且为空时展示全部历史, 输入时包含匹配 (不分大小写)
+                    optionsBuilder: (TextEditingValue value) {
+                      final text = value.text.trim().toLowerCase();
+                      if (text.isEmpty) return _keywordHistory;
+                      return _keywordHistory
+                          .where((e) => e.toLowerCase().contains(text));
+                    },
+                    fieldViewBuilder: (context, textEditingController,
+                        focusNode, onFieldSubmitted) {
+                      // 回车保持原行为: 执行搜索, 不吞成下拉选中
+                      return TextField(
+                        controller: textEditingController,
+                        focusNode: focusNode,
+                        textInputAction: TextInputAction.search,
+                        onSubmitted: (_) => _search(),
+                        decoration:
+                            const InputDecoration(hintText: '站内搜索关键词'),
+                      );
+                    },
+                    optionsViewBuilder: (context, onSelected, options) {
+                      if (options.isEmpty) return const SizedBox.shrink();
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(8),
+                          clipBehavior: Clip.antiAlias,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                                maxWidth: 360, maxHeight: 280),
+                            child: ListView(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 4),
+                              shrinkWrap: true,
+                              children: [
+                                // 点击历史项仅回填 (Autocomplete 选中即写回
+                                // controller), 用户再按搜索, 与主搜索页一致
+                                for (final keyword in options)
+                                  ListTile(
+                                    dense: true,
+                                    visualDensity: VisualDensity.compact,
+                                    leading: Icon(Icons.history_rounded,
+                                        size: 18,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant),
+                                    title: Text(keyword,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis),
+                                    onTap: () => onSelected(keyword),
+                                  ),
+                                const Divider(height: 1),
+                                ListTile(
+                                  dense: true,
+                                  visualDensity: VisualDensity.compact,
+                                  leading: Icon(Icons.delete_sweep_outlined,
+                                      size: 18,
+                                      color:
+                                          Theme.of(context).colorScheme.error),
+                                  title: Text('清空搜索历史',
+                                      style: TextStyle(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .error)),
+                                  onTap: _clearKeywordHistory,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
                 IconButton(
@@ -1462,6 +1442,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                           setState(() {
                             _genre = g;
                             _rememberedGenre = g;
+                            _rememberedKeyword = ''; // 换分区退出搜索
                           });
                           _loadList(reset: true);
                         },
@@ -1498,20 +1479,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                           // [my修复] 同步静态记忆 — 原只删 _activeTags,
                           // 切走再回被 _rememberedTags 灌回
                           _rememberedTags.remove(t);
+                          _rememberedKeyword = ''; // 换标签退出搜索
                           _loadList(reset: true);
                         },
                       ),
                     ),
                 ],
-              ),
-            ),
-          if (_bangumiQuerying)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('正在匹配 Bangumi 评分…',
-                    style: TextStyle(fontSize: 12)),
               ),
             ),
           if (_loading)
@@ -1549,17 +1522,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                 itemCount: _cards.length,
                 itemBuilder: (context, index) {
                   final card = _cards[index];
-                  final ref = _refFor(card);
                   return InkWell(
                     borderRadius: BorderRadius.circular(8),
-                    onTap: () {
-                      final r = _refFor(card);
-                      if (r != null) {
-                        _openBgmSubject(r.subjectId);
-                      } else {
-                        _play(card);
-                      }
-                    },
+                    onTap: () => _play(card),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1613,7 +1578,8 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                         GestureDetector(
                           onTap: () => _showCollectTypePicker(card),
                           child: Icon(
-                            _collectedIds.contains(_itemIdFor(card))
+                            // [my修改] 星标按作品匹配: 同系列其他集自动亮星
+                            _isCardCollected(card)
                                 ? Icons.star
                                 : Icons.star_border,
                             size: 18,
@@ -1626,17 +1592,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 13),
                         ),
-                        if (ref != null)
-                          GestureDetector(
-                            onTap: () => _openBgmSubject(ref.subjectId),
-                            child: Text(
-                              'bgm ★${ref.score.toStringAsFixed(1)} →',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                            ),
-                          ),
                       ],
                     ),
                   );

@@ -36,6 +36,10 @@ class NetworkConfig {
     'bgmapi.com',
     'kazumi.fyi',
     'gugu3.com',
+    // [my新增] 自动跳过片头片尾数据源 (AniList id 映射 + aniskip 区间):
+    // 外域 API, 直连不可达 (实测与浏览站点同病), 必须走代理
+    'anilist.co',
+    'aniskip.com',
   ];
 
   /// [my修改] 用户自配的追加白名单 (设置键 proxyWhitelistExtra, 逗号分隔

@@ -1,5 +1,16 @@
 part of 'collect_library_view.dart';
 
+/// [my新增] 集数角标 (显示层剥裸尾数字的伴随后缀): 弱化小号数字缀于
+/// 标题后; 无集数返回空 span。语义层各处仍用原始完整名。
+TextSpan _episodeSuffix(int? episode, ColorScheme colors) => TextSpan(
+      text: episode == null ? '' : '  $episode',
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        color: colors.onSurfaceVariant,
+      ),
+    );
+
 class _CollectPosterCard extends StatelessWidget {
   const _CollectPosterCard({
     super.key,
@@ -10,6 +21,7 @@ class _CollectPosterCard extends StatelessWidget {
     required this.onChangeType,
     this.isAdultSection = false,
     this.onMoveToMain,
+    this.naturalHeight = false,
   });
 
   final CollectedBangumi entry;
@@ -19,6 +31,10 @@ class _CollectPosterCard extends StatelessWidget {
   final bool showStatus;
   final VoidCallback onOpen;
   final ValueChanged<CollectType>? onChangeType;
+
+  /// [my新增 v2] 瀑布流档: 自撑高度 (封面自然比例 + footer 自然高度),
+  /// 不消费外部 extent; false (cards 档) 行为与原实现逐像素一致。
+  final bool naturalHeight;
 
   static const _coverRatio = 0.65;
   static bool _isCompact(double width) => width < 160;
@@ -64,6 +80,9 @@ class _CollectPosterCard extends StatelessWidget {
     final scaler = MediaQuery.textScalerOf(context);
     final item = entry.bangumiItem;
     final title = CollectLibraryQuery.titleOf(entry);
+    // [my新增] 显示层剥裸尾数字 + 集数角标 (方案一 b): 匹配/存储不动,
+    // 语义层 (Semantics label) 仍用原始完整名
+    final (displayTitle, episodeNo) = SeriesDetector.displayNameParts(title);
     final year = DateTime.tryParse(item.airDate)?.year;
     final type = CollectType.fromValue(entry.type);
     final hasRating = showRating && item.ratingScore > 0;
@@ -88,8 +107,10 @@ class _CollectPosterCard extends StatelessWidget {
       final titleBlock = ExcludeSemantics(
         child: SizedBox(
           height: _titleHeight(scaler, compact: compact),
-          child: Text(
-            title,
+          child: Text.rich(
+            TextSpan(
+                text: displayTitle,
+                children: [_episodeSuffix(episodeNo, colors)]),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.bodyMedium?.copyWith(
@@ -203,14 +224,17 @@ class _CollectPosterCard extends StatelessWidget {
             onTap: onOpen,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: naturalHeight ? MainAxisSize.min : MainAxisSize.max,
               children: [
                 ExcludeSemantics(
-                  child: AspectRatio(
-                    aspectRatio: _coverRatio,
-                    child: _CollectCover(item: item),
-                  ),
+                  child: naturalHeight
+                      ? _CollectCover(item: item, naturalRatio: true)
+                      : AspectRatio(
+                          aspectRatio: _coverRatio,
+                          child: _CollectCover(item: item),
+                        ),
                 ),
-                Expanded(child: footer),
+                if (naturalHeight) footer else Expanded(child: footer),
               ],
             ),
           ),
@@ -244,6 +268,8 @@ class _CollectListTile extends StatelessWidget {
     final colors = theme.colorScheme;
     final item = entry.bangumiItem;
     final title = CollectLibraryQuery.titleOf(entry);
+    // [my新增] 显示层剥裸尾数字 + 集数角标 (方案一 b), 语义层用原名
+    final (displayTitle, episodeNo) = SeriesDetector.displayNameParts(title);
     final airDate = DateTime.tryParse(item.airDate);
     final metadata = [
       if (airDate != null) '${airDate.year} 年',
@@ -297,8 +323,12 @@ class _CollectListTile extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    title,
+                                  Text.rich(
+                                    TextSpan(
+                                        text: displayTitle,
+                                        children: [
+                                          _episodeSuffix(episodeNo, colors)
+                                        ]),
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     style:
@@ -343,28 +373,72 @@ class _CollectListTile extends StatelessWidget {
   }
 }
 
-class _CollectCover extends StatelessWidget {
+class _CollectCover extends StatefulWidget {
   const _CollectCover({
     required this.item,
     this.borderRadius,
+    this.naturalRatio = false,
   });
   final BangumiItem item;
   final BorderRadius? borderRadius;
 
+  /// [my新增 v2] 瀑布流档: 自身包 AspectRatio(自然比例) 并异步解析回填;
+  /// false 时由父级包固定比例 (原行为)。
+  final bool naturalRatio;
+
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, constraints) => Hero(
-          tag: item.id,
-          transitionOnUserGestures: true,
-          flightShuttleBuilder: NetworkImgLayer.heroFlightShuttleBuilder,
-          child: NetworkImgLayer(
-            src: item.images['large'] ?? item.images['common'] ?? '',
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            borderRadius: borderRadius,
-          ),
+  State<_CollectCover> createState() => _CollectCoverState();
+}
+
+class _CollectCoverState extends State<_CollectCover> {
+  String get _src =>
+      widget.item.images['large'] ?? widget.item.images['common'] ?? '';
+
+  double get _ratio => widget.naturalRatio
+      ? _CoverRatioResolver.ratioFor(_src)
+      : _CollectPosterCard._coverRatio;
+
+  void _resolve() {
+    if (!widget.naturalRatio) return;
+    final before = _CoverRatioResolver.ratioFor(_src);
+    _CoverRatioResolver.resolve(_src, onResolved: () {
+      // [my修复] 比例没变 (缓存命中) 不重建 — 消灭瀑布流首建后的无谓跳动
+      if (mounted && _CoverRatioResolver.ratioFor(_src) != before) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(_CollectCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id) _resolve();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cover = LayoutBuilder(
+      builder: (context, constraints) => Hero(
+        tag: widget.item.id,
+        transitionOnUserGestures: true,
+        flightShuttleBuilder: NetworkImgLayer.heroFlightShuttleBuilder,
+        child: NetworkImgLayer(
+          src: _src,
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+          borderRadius: widget.borderRadius,
         ),
-      );
+      ),
+    );
+    if (!widget.naturalRatio) return cover;
+    return AspectRatio(aspectRatio: _ratio, child: cover);
+  }
 }
 
 class _CollectEntryMenu extends StatelessWidget {

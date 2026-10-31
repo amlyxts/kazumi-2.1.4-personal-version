@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:kazumi/app_module.dart';
@@ -84,12 +85,10 @@ void main(List<String> args) async {
     return;
   }
   await DownloadDirectoryService().restoreAccess();
-  // [my新增] 延迟后台预热 CF 过盾 cookies: 首次进入源直连浏览页免 11s
-  // 过盾等待。延迟 5s 避开启动期网络高峰, fire-and-forget 不阻塞启动。
-  Future.delayed(
-    const Duration(seconds: 5),
-    FlareSolverrService.warmupDirectSearch,
-  );
+  // [my提速] 启动即预热 CF 过盾 cookies (原延迟 5s): fire-and-forget
+  // 不阻塞启动; FS 持久会话在此创建。源直连页在预热未完成且无页面
+  // 缓存时会等待其完成 (warmupFuture)。
+  unawaited(FlareSolverrService.warmupDirectSearch());
   final showWindowButton = DesktopWindowConfig.showWindowButton;
   if (isDesktop()) {
     await windowManager.ensureInitialized();

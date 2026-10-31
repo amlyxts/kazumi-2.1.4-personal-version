@@ -8,6 +8,7 @@ import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/modules/collect/collect_change_module.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/services/sync/history_sync_service.dart';
 import 'package:kazumi/services/sync/webdav_remote_file_commit.dart';
 import 'package:kazumi/utils/async_serial_queue.dart';
@@ -349,6 +350,66 @@ class WebDav {
       });
     } catch (e) {
       KazumiLogger().e('WebDav: update collectibles failed', error: e);
+      rethrow;
+    }
+  }
+
+  /// [my新增] 修复收藏分区并重建云端快照 (一次串行事务内完成):
+  /// 1. 下载云端 collectibles/collectchanges 并合并进本地 (不丢其他设备变更);
+  /// 2. 把被旧版同步 bug 误记为表番的源直连条目迁回里番区 (section=1);
+  /// 3. 用修复后的本地库整包覆盖云端快照。
+  /// 返回迁回的条目数。
+  Future<int> repairCollectSectionsAndRebuildSnapshot() async {
+    try {
+      return await _runWebDavExclusive(() async {
+        List<CollectedBangumi> remoteCollectibles = [];
+        List<CollectedBangumiChange> remoteChanges = [];
+        final files = await client.readDir(_syncRootPath);
+        final collectiblesExists =
+            files.any((file) => file.name == 'collectibles.tmp');
+        final changesExists =
+            files.any((file) => file.name == 'collectchanges.tmp');
+        if (collectiblesExists) {
+          await _downloadBox('collectibles');
+        }
+        if (changesExists) {
+          await _downloadBox('collectchanges');
+        }
+        try {
+          if (collectiblesExists) {
+            remoteCollectibles = await GStorage.getCollectiblesFromFile(
+                '${webDavLocalTempDirectory.path}/collectibles.tmp');
+          }
+          if (changesExists) {
+            remoteChanges = await GStorage.getCollectChangesFromFile(
+                '${webDavLocalTempDirectory.path}/collectchanges.tmp');
+          }
+        } catch (e) {
+          KazumiLogger().e('WebDav: read remote collectibles failed', error: e);
+          throw Exception('WebDav: read remote collectibles failed');
+        }
+        if (remoteCollectibles.isNotEmpty || remoteChanges.isNotEmpty) {
+          await GStorage.patchCollectibles(remoteCollectibles, remoteChanges);
+        }
+        final repaired = GStorage.collectibles.values
+            .where(CollectSectionRepair.isMisplacedDirectCollectible)
+            .toList();
+        for (final collectible in repaired) {
+          collectible.section = 1;
+          await GStorage.putCollectible(collectible);
+        }
+        await GStorage.collectibles.flush();
+        await GStorage.collectChanges.flush();
+        await _updateBox('collectibles');
+        if (GStorage.collectChanges.isNotEmpty) {
+          await _updateBox('collectchanges');
+        }
+        KazumiLogger().i(
+            'WebDav: repaired ${repaired.length} misplaced collect sections');
+        return repaired.length;
+      });
+    } catch (e) {
+      KazumiLogger().e('WebDav: repair collect sections failed', error: e);
       rethrow;
     }
   }

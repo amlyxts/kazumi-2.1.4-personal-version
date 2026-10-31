@@ -2,6 +2,7 @@ import 'package:kazumi/modules/bangumi/bangumi_collection.dart';
 import 'package:kazumi/modules/bangumi/sync_priority.dart';
 import 'package:kazumi/modules/collect/collect_change_module.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/modules/collect/collect_type_mapper.dart';
 
 class CollectiblesMergeResult {
@@ -136,8 +137,13 @@ class CollectSyncMerger {
     required List<BangumiCollection> remoteCollections,
     required BangumiSyncPriority priority,
   }) {
+    // [my加固] 直连源条目 (哈希 id / 带源站播放页 URL) 不是真实 Bangumi
+    // 条目, 上传必然 404 并中断整轮同步。旧版脏数据可能把它们写成
+    // section=0 混进表番集, 这里在生成上传计划前无条件豁免。
     final localMap = {
-      for (final item in localCollectibles) item.bangumiItem.id: item,
+      for (final item in localCollectibles)
+        if (!CollectSectionRepair.isDirectSourceCollectible(item))
+          item.bangumiItem.id: item,
     };
     final remoteMap = <int, BangumiCollection>{};
     for (final item in remoteCollections) {

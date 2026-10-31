@@ -886,6 +886,19 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                     onPressed: widget.showDanmakuSwitch,
                     label: '弹幕切换',
                   ),
+                  // [my新增] 自动跳过片头片尾快速开关 (持久化, 设置页同款)
+                  KazumiMenuItem(
+                    onPressed: () {
+                      final next = !playerController.playback.autoSkipOpEd;
+                      playerController.playback.setAutoSkipOpEd(next);
+                      KazumiDialog.showToast(
+                          message: next
+                              ? '已开启自动跳过片头片尾'
+                              : '已关闭自动跳过片头片尾');
+                    },
+                    label: '自动跳过片头片尾',
+                    selected: playerController.playback.autoSkipOpEd,
+                  ),
                   if (compact) _danmakuSettingsMenuItem,
                   KazumiMenuItem(
                     onPressed: widget.showVideoInfo,

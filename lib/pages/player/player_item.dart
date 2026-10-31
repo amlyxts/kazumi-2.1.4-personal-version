@@ -13,7 +13,9 @@ import 'package:kazumi/pages/player/syncplay_sheet.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
+import 'package:kazumi/services/skip/skip_time_service.dart';
 import 'package:kazumi/services/sync/webdav.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:flutter/gestures.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
 import 'package:flutter/material.dart';
@@ -77,6 +79,11 @@ class _PlayerItemState extends State<PlayerItem>
   late final PlayerController playerController;
   late final VideoPageController videoPageController =
       widget.videoPageController;
+
+  // [my新增] 自动跳过片头片尾: 切集复位的首跳提示 + 集号跟踪
+  int? _autoSkipEpisode;
+  bool _autoSkipToastShown = false;
+  bool _autoSkipNoDataLogged = false;
   final HistoryController historyController = inject<HistoryController>();
   final MyController myController = inject<MyController>();
   AudioController get _audioController => playerController.audioController;
@@ -588,6 +595,100 @@ class _PlayerItemState extends State<PlayerItem>
     playerController.danmaku.setDanmakuEnabled(true);
     GStorage.putSetting(SettingsKeys.danmakuEnabledByDefault, true);
     unawaited(_updateAndroidPIPActions(force: true));
+  }
+
+  /// [my新增] 自动跳过片头片尾判定 (1s 计时器 tick 调用, 全程静默):
+  /// 社区数据 (aniskip, 懒取+会话缓存) 优先; 无数据回退手动秒数设置。
+  /// 守卫: 总开关关 / 用户拖动中 / Syncplay 会话 / 时长未就绪 / 集号缺失
+  /// 均不跳。区间合法性 end ≤ 时长×1.2 (数据异常丢弃)。
+  Future<void> _autoSkipTick() async {
+    try {
+      if (!playerController.playback.autoSkipOpEd) return;
+      if (_progressBarDragHold != null) return; // 用户拖动进度条中
+      if (playerController.syncplay.hasSession) return; // 会钟打架
+      final playback = playerController.playback;
+      final durationSec = playback.duration.inSeconds;
+      if (durationSec <= 0) return;
+      final posMs = playback.currentPosition.inMilliseconds;
+      final episode = videoPageController.playbackEpisode.episode;
+      if (episode != _autoSkipEpisode) {
+        _autoSkipEpisode = episode;
+        _autoSkipToastShown = false;
+        _autoSkipNoDataLogged = false;
+      }
+      final item = videoPageController.bangumiItem;
+      // [my修复] 用原名 (日文/罗马字) 检索 AniList —— nameCn 中文 AniList
+      // 不索引, 匹配恒失败且负结果不缓存, 表现为"跳过与缓存都不生效"
+      final subjectName = item.name.isNotEmpty ? item.name : item.nameCn;
+
+      // 懒取社区区间 (服务内会话缓存, 稳态零网络)
+      List<SkipInterval>? intervals;
+      // [my修复] id 优先解析链: 下载页缓存播放伪造的条目 name/nameCn 全是
+      // 中文名, 名称路径必失败 —— 真实 bgm id 走 bgm API 取原名再查 AniList;
+      // 直连条目 (info=URL/哈希) 走名称路径 (R18 预期无数据 → 手动回退)
+      final malId = await SkipTimeService.resolveMalIdForSubject(
+        isBgmSubject: !CollectSectionRepair.isDirectSourceItem(item),
+        subjectId: item.id,
+        fallbackName: subjectName,
+      );
+      if (malId != null) {
+        intervals = await SkipTimeService.intervalsFor(
+          malId: malId,
+          episodeNumber: episode,
+          episodeLengthSec: durationSec,
+        );
+      }
+
+      Duration? target;
+      var skipType = '';
+      if (intervals != null && intervals.isNotEmpty) {
+        for (final it in intervals) {
+          if (it.end > durationSec * 1.2) continue; // 数据异常
+          final startMs = it.start * 1000;
+          final endMs = it.end * 1000;
+          if (posMs >= startMs && posMs < endMs - 500) {
+            target = Duration(milliseconds: endMs.round());
+            skipType = it.type;
+            break;
+          }
+        }
+      } else {
+        // 手动秒数回退 (无社区数据时)
+        final opSec =
+            GStorage.getSetting(SettingsKeys.autoSkipOpManualSeconds);
+        if (opSec > 0 && posMs < opSec * 1000) {
+          target = Duration(seconds: opSec);
+          skipType = 'op';
+        } else {
+          final edSec =
+              GStorage.getSetting(SettingsKeys.autoSkipEdManualSeconds);
+          if (edSec > 0 && posMs >= durationSec * 1000 - edSec * 1000) {
+            // 跳到末尾: completed 事件接管 (自动连播开启才进下一集)
+            target = playback.duration;
+            skipType = 'ed';
+          }
+        }
+      }
+      if (target == null) {
+        // [my新增] 一次/集 的诊断日志 (进文件, 便于排查"为什么没跳")
+        if (!_autoSkipNoDataLogged) {
+          _autoSkipNoDataLogged = true;
+          KazumiLogger().w(
+              'SkipTime: 无跳过数据 ep=$episode malId=${malId ?? "未匹配"} '
+              '区间=${intervals?.length ?? 0} '
+              '手动OP=${GStorage.getSetting(SettingsKeys.autoSkipOpManualSeconds)} '
+              '手动ED=${GStorage.getSetting(SettingsKeys.autoSkipEdManualSeconds)}');
+        }        return;
+      }
+      await playerController.seek(target);
+      if (!_autoSkipToastShown && mounted) {
+        _autoSkipToastShown = true;
+        KazumiDialog.showToast(
+            message: skipType == 'ed' ? '已自动跳过片尾' : '已自动跳过片头');
+      }
+    } catch (_) {
+      // 判定/取数失败静默 (计时器下一轮重试或放弃)
+    }
   }
 
   Future<void> _syncHistoryWithWebDav() async {
@@ -1181,6 +1282,7 @@ class _PlayerItemState extends State<PlayerItem>
   Timer getPlayerTimer() {
     return Timer.periodic(const Duration(seconds: 1), (timer) {
       playerController.syncPlaybackState();
+      unawaited(_autoSkipTick());
       unawaited(_updateAndroidPIPActions());
       _syncAudioServiceState();
       _emitDanmakusForCurrentPosition();

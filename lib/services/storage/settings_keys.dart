@@ -97,6 +97,38 @@ class SettingsKeys {
     10,
     group: SettingGroup.player,
   );
+  // [my新增] 自动跳过片头片尾: 社区数据源 (aniskip) 无数据时回退手动秒数。
+  // 总开关默认关 (尊重用户); 秒数 0 = 不跳。
+  static const autoSkipOpEd = SettingKey<bool>(
+    'autoSkipOpEd',
+    false,
+    group: SettingGroup.player,
+  );
+  static const autoSkipOpManualSeconds = SettingKey<int>(
+    'autoSkipOpManualSeconds',
+    0,
+    group: SettingGroup.player,
+  );
+  static const autoSkipEdManualSeconds = SettingKey<int>(
+    'autoSkipEdManualSeconds',
+    0,
+    group: SettingGroup.player,
+  );
+  /// bgm 原名 → MAL id 映射持久缓存 (SkipTimeService 用, 每番一条; 非用户
+  /// 设置, 派生数据; 不注册 all → 不云同步)
+  static const skipTimeIdMap = SettingKey<String>(
+    'skipTimeIdMap',
+    '',
+    group: SettingGroup.player,
+  );
+  /// [my新增] 封面自然比例持久缓存 (瀑布流档, url → w/h): 首次进页逐卡
+  /// 解析会有可感跳动, 持久化后二次进页按存值直接首建。派生数据, 不注册
+  /// all → 不云同步。
+  static const collectCoverRatioCache = SettingKey<String>(
+    'collectCoverRatioCache',
+    '',
+    group: SettingGroup.collect,
+  );
   static const danmakuEnhance = SettingKey<bool>(
     _SettingBoxKey.danmakuEnhance,
     true,
@@ -488,7 +520,16 @@ class SettingsKeys {
     'directSearchClaims',
     '',
     group: SettingGroup.proxy,
-  );  static const proxyConfigured = SettingKey<bool>(
+  );
+  // [my新增] 源直连浏览的站内搜索历史: JSON 字符串数组 (新在前, 上限 20),
+  // 供输入框下拉回填; 与主搜索页 Bangumi 搜索历史 (Hive box) 互不混用,
+  // 不注册进 all → 不参与云同步, R18 关键词只留本地 (同 directSearchClaims)。
+  static const directSearchKeywordHistory = SettingKey<String>(
+    'directSearchKeywordHistory',
+    '',
+    group: SettingGroup.proxy,
+  );
+  static const proxyConfigured = SettingKey<bool>(
     _SettingBoxKey.proxyConfigured,
     false,
     group: SettingGroup.proxy,

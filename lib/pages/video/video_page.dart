@@ -179,6 +179,18 @@ class _VideoPageState extends State<VideoPage>
           }
         }
       }
+    } else if (widget.args case OnlineVideoPlaybackArgs(
+        :final startEpisode?,
+        :final startRoad)) {
+      // [my新增] 无历史时的作品起始集 (入口按系列锚点传入, 通常=第一集);
+      // 有历史时上面分支已按"上次访问的集数"恢复
+      if (startEpisode >= 1 &&
+          videoPageController.roadList.length > startRoad &&
+          videoPageController.roadList[startRoad].data.length >=
+              startEpisode) {
+        videoPageController.resetEpisodeState(
+            episode: startEpisode, road: startRoad);
+      }
     }
     _revealCurrentEpisode();
 

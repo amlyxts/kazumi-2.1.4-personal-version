@@ -2,19 +2,23 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
+import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:kazumi/bean/appbar/sys_app_bar.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/modules/collect/collect_layout.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/pages/direct_search/series_detector.dart';
 import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/adult_collect/adult_random_pick_sheet.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/pages/collect/collect_library_view.dart';
+import 'package:kazumi/services/collect/collect_export_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
@@ -95,15 +99,47 @@ class _AdultCollectPageState extends State<AdultCollectPage>
       if (roads.isEmpty) {
         throw Exception('未获取到播放线路');
       }
+      // [my新增] 旧格式条目惰性升级: 打开时取到播放列表并判定为系列 →
+      // 把该条目改写为作品条目 (id/名称/锚点), 并合并同作品的其他旧收藏;
+      // 之后播放/历史/收藏均按作品归一。类型沿用被升级条目。
+      BangumiItem playItem = item;
+      if (entry.type != 0) {
+        // [my优化·抽取] 惰性升级走共享 upgradeToSeries (与收藏/迁移同源)
+        final (status, upgradedItem, _) =
+            await SeriesDetector.upgradeToSeries(
+          pluginName: plugin!.name,
+          item: item,
+          roads: roads,
+          type: entry.type,
+          add: (it, t) => _collectController.addCollectLocalOnly(it,
+              type: t, section: 1),
+          delete: (it) => _collectController.deleteCollectLocalOnly(it),
+          all: _collectController.collectibles,
+        );
+        if (status == SeriesDetector.seriesUpgradeCreated) {
+          playItem = upgradedItem;
+        }
+      }
+      // [my新增] 起始集 = 收藏条目指向的链接 (系列条目=锚点即第一集,
+      // 旧单集条目=所收的那集); 有历史时播放页自动恢复上次看到的集数
+      var startRoad = 0;
+      int? startEpisode;
+      final roadIndex = roads.indexWhere((r) => r.data.contains(src));
+      if (roadIndex >= 0) {
+        startRoad = roadIndex;
+        startEpisode = roads[roadIndex].data.lastIndexOf(src) + 1;
+      }
       if (mounted) {
         task.withContext((context) => context.pushNamed(
               '/video/',
               arguments: OnlineVideoPlaybackArgs(
-                bangumiItem: item,
+                bangumiItem: playItem,
                 plugin: plugin!,
-                title: item.nameCn.isNotEmpty ? item.nameCn : item.name,
+                title: playItem.nameCn.isNotEmpty ? playItem.nameCn : playItem.name,
                 src: src,
                 roads: roads,
+                startEpisode: startEpisode,
+                startRoad: startRoad,
               ),
             ));
       }
@@ -137,40 +173,82 @@ class _AdultCollectPageState extends State<AdultCollectPage>
             icon: const Icon(Icons.move_down_rounded),
             onPressed: _showImportPicker,
           ),
+          IconButton(
+            tooltip: '修复误迁移条目',
+            icon: const Icon(Icons.healing_rounded),
+            onPressed: _showSectionRepair,
+          ),
+          IconButton(
+            tooltip: '全部作品化迁移',
+            icon: const Icon(Icons.merge_type_rounded),
+            onPressed: _migrateAllToSeries,
+          ),
+          IconButton(
+            tooltip: '导出收藏 JSON',
+            icon: const Icon(Icons.ios_share_rounded),
+            onPressed: _exportCollectibles,
+          ),
         ],
       ),
       body: SafeArea(
         top: false,
         bottom: false,
-        child: CollectLibraryView(
-          // 只喂里番区条目 (section 过滤在页面层, 与追番页对称)
-          entries: _collectController.collectibles
-              .where((c) => c.section == 1)
-              .toList(),
-          showRating: GStorage.getSetting(SettingsKeys.showRating),
-          layout: _layout,
-          onLayoutChanged: _changeLayout,
-          canEdit: (_) => true,
-          onOpen: (item) {
-            final entry = _collectController.collectibles.firstWhere(
-              (c) => c.bangumiItem.id == item.id,
-              orElse: () => CollectedBangumi(item, DateTime.now(), 0),
-            );
-            _open(entry);
-          },
-          onChangeType: (item, type) => unawaited(_changeType(item, type)),
-          isAdultSection: true,
-          onMoveToMain: (item) async {
-            await _collectController.setCollectSection(item.id, 0);
-            if (mounted) KazumiDialog.showToast(message: '已移回追番 (表番区)');
-          },
+        // [my修复] Observer 包裹: loadCollectibles 改的是 ObservableList,
+        // 页面不包 Observer 时切分类/移回追番/修复迁回后列表不刷新
+        // (追番页同位置一直有 Observer)
+        child: Observer(
+          builder: (_) => CollectLibraryView(
+            // 只喂里番区条目 (section 过滤在页面层, 与追番页对称)
+            entries: _collectController.collectibles
+                .where((c) => c.section == 1)
+                .toList(),
+            showRating: GStorage.getSetting(SettingsKeys.showRating),
+            layout: _layout,
+            onLayoutChanged: _changeLayout,
+            canEdit: (_) => true,
+            onOpen: (item) {
+              final entry = _collectController.collectibles.firstWhere(
+                (c) => c.bangumiItem.id == item.id,
+                orElse: () => CollectedBangumi(item, DateTime.now(), 0),
+              );
+              _open(entry);
+            },
+            onChangeType: (item, type) => unawaited(_changeType(item, type)),
+            isAdultSection: true,
+            onMoveToMain: (item) async {
+              await _collectController.setCollectSection(item.id, 0);
+              if (mounted) KazumiDialog.showToast(message: '已移回追番 (表番区)');
+            },
+          ),
         ),
       ),
     );
   }
 
-  Future<void> _changeType(BangumiItem item, CollectType type) async {
-    if (type == CollectType.none) {
+  /// [my新增] 导出里番区收藏为 JSON (手动备份/跨设备分享, 免服务器):
+  /// 仅 section==1; 空库提示不弹文件框; 对话只报条目数 (敏感纪律)。
+  Future<void> _exportCollectibles() async {
+    final entries = _collectController.collectibles
+        .where((c) => c.section == 1)
+        .toList(growable: false);
+    if (entries.isEmpty) {
+      KazumiDialog.showToast(message: '没有可导出的直连收藏');
+      return;
+    }
+    try {
+      final result = await CollectExportService.exportDirectCollectibles(
+          _collectController.collectibles);
+      if (result == null) return; // 用户取消
+      if (mounted) {
+        KazumiDialog.showToast(message: '已导出 ${result.count} 条直连收藏');
+      }
+    } catch (e) {
+      KazumiLogger().w('AdultCollect: export failed', error: e);
+      if (mounted) KazumiDialog.showToast(message: '导出失败，请稍后重试');
+    }
+  }
+
+  Future<void> _changeType(BangumiItem item, CollectType type) async {    if (type == CollectType.none) {
       await _collectController.deleteCollectLocalOnly(item);
       if (mounted) KazumiDialog.showToast(message: '已取消收藏');
       return;
@@ -192,6 +270,212 @@ class _AdultCollectPageState extends State<AdultCollectPage>
       historyController: inject<HistoryController>(),
       onPlay: (item) => _open(CollectedBangumi(item, DateTime.now(),
           CollectType.planToWatch.value, section: 1)),
+    );
+  }
+
+  /// [my新增] 全部作品化迁移: 逐条解析播放列表判定系列, 旧格式单集收藏
+  /// 升级为作品条目 (类型沿用), 并合并同作品重复收藏。耗时与条目数成正比。
+  Future<void> _migrateAllToSeries() async {
+    if (dialogs.isRunning) return;
+    final entries = _collectController.collectibles
+        .where((c) =>
+            c.section == 1 &&
+            CollectSectionRepair.isDirectSourceItem(c.bangumiItem) &&
+            c.bangumiItem.info.trim().isNotEmpty)
+        .toList();
+    if (entries.isEmpty) {
+      KazumiDialog.showToast(message: '没有可迁移的条目');
+      return;
+    }
+    final confirmed = await KazumiDialog.show<bool>(
+      builder: (context) => AlertDialog(
+        title: const Text('全部作品化迁移', style: TextStyle(fontSize: 16)),
+        content: Text(
+          '将逐条解析 ${entries.length} 个收藏的播放列表, 把旧格式单集收藏'
+          '升级为作品条目, 并合并同作品的重复收藏。\n\n'
+          '需要网络, 每条约数秒, 期间请保持应用开启。',
+          style: const TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('开始迁移'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await dialogs.run((task) async {
+      await task.loading(
+        message: '正在批量作品化收藏…',
+        barrierDismissible: isDesktop(),
+        // [my优化] 批量区间挂起逐条刷新, 结束统一刷一次
+        action: () => _collectController.suppressLoads(() async {
+          final plugins = inject<PluginsController>().pluginList;
+          var upgraded = 0;
+          var merged = 0;
+          var cleaned = 0;
+          var failed = 0;
+          final doneIds = <int>{};
+          for (final entry in entries) {
+            final item = entry.bangumiItem;
+            if (doneIds.contains(item.id)) continue;
+            doneIds.add(item.id);
+            try {
+              final src = item.info.trim();
+              final host = Uri.tryParse(src)?.host ?? '';
+              Plugin? plugin;
+              for (final p in plugins) {
+                if ((Uri.tryParse(p.baseUrl)?.host ?? '') == host) {
+                  plugin = p;
+                  break;
+                }
+              }
+              if (plugin == null) {
+                failed++;
+                continue;
+              }
+              final roads = await plugin.queryChapterRoads(src);
+              final (status, upgradedItem, mergedCount) =
+                  await SeriesDetector.upgradeToSeries(
+                pluginName: plugin.name,
+                item: item,
+                roads: roads,
+                type: entry.type,
+                add: (it, t) => _collectController.addCollectLocalOnly(it,
+                    type: t, section: 1),
+                delete: (it) =>
+                    _collectController.deleteCollectLocalOnly(it),
+                all: _collectController.collectibles,
+              );
+              if (status == SeriesDetector.seriesUpgradeCreated) {
+                upgraded++;
+                merged += mergedCount;
+                doneIds.add(item.id);
+                for (final sibling in SeriesDetector.findSameSeriesSiblings(
+                    upgradedItem, _collectController.collectibles)) {
+                  doneIds.add(sibling.bangumiItem.id);
+                }
+                continue;
+              }
+              if (status == SeriesDetector.seriesUpgradeUnchanged) {
+                doneIds.add(item.id);
+                continue;
+              }
+              // NoChange = 非系列/空线路: 只做命名清洗 (剥带量词的
+                // 集数标记; id 不变 → 历史不脱钩)
+                final currentName = item.nameCn.isNotEmpty
+                    ? item.nameCn
+                    : item.name;
+                final cleanName = SeriesDetector.namingName(currentName);
+                if (cleanName != currentName && cleanName.length >= 2) {
+                  await _collectController.updateLocalCollect(
+                    BangumiItem(
+                      id: item.id,
+                      type: item.type,
+                      name: cleanName,
+                      nameCn: cleanName,
+                      summary: item.summary,
+                      airDate: item.airDate,
+                      airWeekday: item.airWeekday,
+                      rank: item.rank,
+                      images: item.images,
+                      tags: item.tags,
+                      alias: item.alias,
+                      ratingScore: item.ratingScore,
+                      votes: item.votes,
+                      votesCount: item.votesCount,
+                      info: item.info,
+                    ),
+                  );
+                  cleaned++;
+                }
+            } catch (error) {
+              failed++;
+              KazumiLogger().w('AdultCollect: migrate entry failed',
+                  error: error);
+            }
+          }
+          if (!mounted) return;
+          KazumiDialog.showToast(
+              message: '作品化完成：升级 $upgraded 条，合并 $merged 条'
+                  '${cleaned > 0 ? "，改名 $cleaned 条" : ""}'
+                  '${failed > 0 ? "，失败 $failed 条" : ""}');
+        }),
+      );
+    }, onError: (error, stackTrace) {
+      KazumiLogger().w('AdultCollect: migrate all failed', error: error);
+      KazumiDialog.showToast(message: '迁移中断，请稍后重试');
+    });
+  }
+
+  /// [my新增] 修复旧版同步 bug 留下的分区错乱: 源直连条目 (info 带
+  /// 播放页地址 / 哈希 id) 被错误记成表番时, 批量迁回里番区。
+  Future<void> _showSectionRepair() async {
+    final candidates = CollectSectionRepair.findMisplacedDirectCollectibles(
+        _collectController.collectibles);
+    if (candidates.isEmpty) {
+      KazumiDialog.showToast(message: '未发现误迁移条目');
+      return;
+    }
+    final confirmed = await KazumiDialog.show<bool>(
+      builder: (context) => AlertDialog(
+        title: Text(
+          '发现 ${candidates.length} 条误迁移条目',
+          style: const TextStyle(fontSize: 16),
+        ),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '这些条目由源直连页收藏, 本应属于里番区, 但被旧版同步写成了表番。',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 280),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final c in candidates)
+                      Text(
+                        '· ${c.bangumiItem.nameCn.isNotEmpty ? c.bangumiItem.nameCn : c.bangumiItem.name}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text('迁回里番区 (${candidates.length})'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    for (final c in candidates) {
+      await _collectController.setCollectSection(c.bangumiItem.id, 1);
+    }
+    if (!mounted) return;
+    KazumiDialog.showToast(
+      message: '已迁回 ${candidates.length} 条；请到 WebDAV 设置重建收藏云快照',
     );
   }
 

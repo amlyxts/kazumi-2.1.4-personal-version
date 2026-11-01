@@ -50,6 +50,19 @@ class SkipTimeService {
   // bgm id 维度的负缓存 (bgm API 失败/原名未匹配)
   static final Set<String> _bgmNoMatch = {};
 
+  /// [my新增] 镜像配置 (base+token 齐全才生效): iOS 无代理环境经自建
+  /// frp 反代访问数据源; 留空 = 默认直连/走代理 (Windows 原路径)。
+  static (String base, String token)? get _mirror {
+    final base = GStorage.getSetting(SettingsKeys.skipMirrorBase).trim();
+    if (base.isEmpty) return null;
+    final token = GStorage.getSetting(SettingsKeys.skipMirrorToken).trim();
+    if (token.isEmpty) return null;
+    return (
+      base.endsWith('/') ? base.substring(0, base.length - 1) : base,
+      token,
+    );
+  }
+
   // —— 区间 (会话内存) ——
   // key: 'malId:episode' → 区间列表 (空列表 = 该集无社区数据)
   static final Map<String, List<SkipInterval>> _intervalCache = {};
@@ -139,8 +152,13 @@ class SkipTimeService {
   /// AniList 搜索 (纯查询): 返回最佳 malId 或 null (无阈值命中)。
   /// 异常向上抛, 由调用方决定缓存与日志口径。
   static Future<int?> _anilistSearch(String query) async {
-    final resp = await _dio.post('https://graphql.anilist.co', data: {
-      'query': '''
+    final mirror = _mirror;
+    final resp = await _dio.post(
+      mirror == null
+          ? 'https://graphql.anilist.co'
+          : '${mirror.$1}/skip/anilist',
+      data: {
+        'query': '''
 query (\$search: String) {
   Page(perPage: 5) {
     media(search: \$search, type: ANIME) {
@@ -149,8 +167,12 @@ query (\$search: String) {
     }
   }
 }''',
-      'variables': {'search': query},
-    });
+        'variables': {'search': query},
+      },
+      options: mirror == null
+          ? null
+          : Options(headers: {'X-Skip-Token': mirror.$2}),
+    );
     final media =
         (resp.data['data']?['Page']?['media'] as List? ?? const []);
     int? best;
@@ -213,12 +235,18 @@ query (\$search: String) {
   static Future<List<SkipInterval>> _intervalsRemote(
       int malId, int episodeNumber, int episodeLengthSec, String key) async {
     try {
+      final mirror = _mirror;
       final resp = await _dio.get(
-        'https://api.aniskip.com/v2/skip-times/$malId/$episodeNumber',
+        mirror == null
+            ? 'https://api.aniskip.com/v2/skip-times/$malId/$episodeNumber'
+            : '${mirror.$1}/skip/aniskip/v2/skip-times/$malId/$episodeNumber',
         queryParameters: {
           'types': ['op', 'ed'],
           'episodeLength': episodeLengthSec,
         },
+        options: mirror == null
+            ? null
+            : Options(headers: {'X-Skip-Token': mirror.$2}),
       );
       final data = resp.data;
       final found = data is Map && data['found'] == true;

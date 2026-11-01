@@ -165,6 +165,60 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
     });
   }
 
+  /// [my新增] 跳过镜像编辑: 地址+token 同框填写; 「清除」一键置空两键
+  /// 恢复直连/走代理 (存储保持两键, 服务侧零改动)
+  Future<void> _editSkipMirror() async {
+    final baseController = TextEditingController(
+        text: GStorage.getSetting(SettingsKeys.skipMirrorBase));
+    final tokenController = TextEditingController(
+        text: GStorage.getSetting(SettingsKeys.skipMirrorToken));
+    Future<void> save(String base, String token) async {
+      await GStorage.putSetting(SettingsKeys.skipMirrorBase, base);
+      await GStorage.putSetting(SettingsKeys.skipMirrorToken, token);
+      KazumiDialog.dismiss();
+      if (mounted) setState(() {});
+    }
+
+    await KazumiDialog.show(
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('跳过数据源镜像', style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: baseController,
+              decoration: const InputDecoration(
+                  labelText: '镜像地址', hintText: 'http://host:31033'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: tokenController,
+              decoration: const InputDecoration(
+                  labelText: '访问 Token', hintText: '与服务端一致'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => save('', ''),
+            child: const Text('清除'),
+          ),
+          TextButton(
+            onPressed: KazumiDialog.dismiss,
+            child: Text('取消',
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.outline)),
+          ),
+          TextButton(
+            onPressed: () => save(baseController.text.trim(),
+                tokenController.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// [my新增] 片头/片尾手动跳过秒数 (复用快进时长数字输入对话框)
   Future<void> _updateSkipSeconds({required bool isOp}) async {
     final current = isOp ? autoSkipOpManualSeconds : autoSkipEdManualSeconds;
@@ -403,6 +457,20 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                 title: Text('片尾手动跳过秒数'),
                 description: Text('无社区数据时跳过结尾 N 秒 (当前: '
                     '$autoSkipEdManualSeconds 秒, 0 为不跳)'),
+              ),
+              // [my新增] 自建镜像 (iOS 无代理环境): 地址+token 同框填写,
+              // 三端通用; 清除/留空维持直连/走代理
+              SettingsTile(
+                leading: Icons.dns_rounded,
+                onPressed: (_) => _editSkipMirror(),
+                title: Text('跳过数据源镜像'),
+                description: Text(() {
+                  final base =
+                      GStorage.getSetting(SettingsKeys.skipMirrorBase);
+                  return base.isEmpty
+                      ? '留空=直连/走代理 (iOS 无代理环境可填自建镜像)'
+                      : '已配置: $base';
+                }()),
               ),
               if (Platform.isAndroid)
                 SettingsTile.switchTile(

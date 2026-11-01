@@ -114,6 +114,19 @@ class SettingsKeys {
     0,
     group: SettingGroup.player,
   );
+  /// [my新增] 跳过数据源镜像 (自建 frp 反代, iOS 无代理环境用): base 形如
+  /// http://host:31033, token 为镜像校验头; 两键不注册 all → 不云同步
+  /// (镜像地址含家网拓扑属个人隐私)。留空 = 默认直连/走代理。
+  static const skipMirrorBase = SettingKey<String>(
+    'skipMirrorBase',
+    '',
+    group: SettingGroup.player,
+  );
+  static const skipMirrorToken = SettingKey<String>(
+    'skipMirrorToken',
+    '',
+    group: SettingGroup.player,
+  );
   /// bgm 原名 → MAL id 映射持久缓存 (SkipTimeService 用, 每番一条; 非用户
   /// 设置, 派生数据; 不注册 all → 不云同步)
   static const skipTimeIdMap = SettingKey<String>(

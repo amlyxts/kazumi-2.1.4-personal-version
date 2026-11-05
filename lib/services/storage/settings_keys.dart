@@ -663,6 +663,13 @@ class SettingsKeys {
     false,
     group: SettingGroup.sync,
   );
+  // [my新增] 信任 WebDAV 自签证书 (自建 rclone serve webdav 等场景):
+  // 默认关; 信任策略属单机安全决策, 不注册 all → 不云同步。
+  static const webDavTrustSelfSigned = SettingKey<bool>(
+    'webDavTrustSelfSigned',
+    false,
+    group: SettingGroup.webdav,
+  );
   static const webDavSettingsSyncUpdatedAt = SettingKey<int>(
     'webDavSettingsSyncUpdatedAt',
     0,

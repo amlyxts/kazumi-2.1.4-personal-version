@@ -22,6 +22,8 @@ class _WebDavServerPageState extends State<WebDavServerPage> {
   final _username = TextEditingController();
   final _password = TextEditingController();
   bool _passwordVisible = false;
+  // [my新增] 自签证书信任 (自建服务器用)
+  bool _trustSelfSigned = false;
   bool _busy = false;
   bool _failed = false;
   String? _message;
@@ -32,6 +34,8 @@ class _WebDavServerPageState extends State<WebDavServerPage> {
     _url.text = GStorage.getSetting(SettingsKeys.webDavURL);
     _username.text = GStorage.getSetting(SettingsKeys.webDavUsername);
     _password.text = GStorage.getSetting(SettingsKeys.webDavPassword);
+    _trustSelfSigned =
+        GStorage.getSetting(SettingsKeys.webDavTrustSelfSigned);
   }
 
   @override
@@ -55,6 +59,9 @@ class _WebDavServerPageState extends State<WebDavServerPage> {
       await GStorage.putSetting(
           SettingsKeys.webDavUsername, _username.text.trim());
       await GStorage.putSetting(SettingsKeys.webDavPassword, _password.text);
+      // [my新增] 信任开关先于连接测试落盘 — init 时按它挂证书豁免
+      await GStorage.putSetting(
+          SettingsKeys.webDavTrustSelfSigned, _trustSelfSigned);
       await WebDav().init();
       _message = '连接成功，配置已保存';
     } catch (e) {
@@ -143,6 +150,19 @@ class _WebDavServerPageState extends State<WebDavServerPage> {
                                 : Icons.visibility_rounded),
                           ),
                         ),
+                      ),
+                      // [my新增] 自签证书信任开关 (自建 rclone serve webdav
+                      // 等场景; 公共云盘保持关)
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('信任自签证书'),
+                        subtitle: const Text(
+                            '仅自建服务器使用 (如 rclone serve webdav); 公共云盘保持关闭'),
+                        value: _trustSelfSigned,
+                        onChanged: _busy
+                            ? null
+                            : (value) =>
+                                setState(() => _trustSelfSigned = value),
                       ),
                     ],
                   ),

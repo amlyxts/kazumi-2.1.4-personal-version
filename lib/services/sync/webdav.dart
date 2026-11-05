@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:dio/io.dart';
 import 'package:webdav_client/webdav_client.dart' as webdav;
 import 'package:path_provider/path_provider.dart';
 import 'package:kazumi/modules/history/history_sync.dart';
@@ -62,6 +63,18 @@ class WebDav {
     );
     client.setHeaders({'accept-charset': 'utf-8'});
     client.c.options.contentType = 'application/octet-stream';
+    // [my新增] 自建 WebDAV 服务器自签证书信任开关 (默认关; 仅自建
+    // rclone serve webdav 等场景使用, 公共云盘保持关闭)。
+    // createHttpClient=握手期接受自签 (OS 拒绝发生在 badCertificateCallback
+    // 阶段, validateCertificate 管不到); validateCertificate=叶证书二道确认。
+    if (GStorage.getSetting(SettingsKeys.webDavTrustSelfSigned)) {
+      final adapter = client.c.httpClientAdapter;
+      if (adapter is IOHttpClientAdapter) {
+        adapter.createHttpClient = () =>
+            HttpClient()..badCertificateCallback = (cert, host, port) => true;
+        adapter.validateCertificate = (cert, host, port) => true;
+      }
+    }
     try {
       await client.ping();
       await _ensureRemoteDirectory(_syncRootPath);

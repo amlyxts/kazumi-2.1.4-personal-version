@@ -82,7 +82,7 @@ void main() {
       print('searchList 命中: ${items.length}');
       if (items.isNotEmpty) {
         final n = items.first;
-        for (final expr in ['.//h2', 'h2', './h2', './/h2/a', 'descendant::h2']) {
+        for (final expr in ['.', 'self::a', './self::a']) {
           try {
             final r = n.queryXPath(expr).nodes;
             // ignore: avoid_print

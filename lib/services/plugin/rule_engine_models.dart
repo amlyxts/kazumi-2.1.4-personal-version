@@ -68,6 +68,7 @@ class RuleExecutionConfig {
     required this.searchApiConfig,
     required this.chapterApiConfig,
     required this.antiCrawlerConfig,
+    this.webviewFetch = false,
   });
 
   final String pluginName;
@@ -84,6 +85,10 @@ class RuleExecutionConfig {
   final ApiSearchConfig searchApiConfig;
   final ApiChapterConfig chapterApiConfig;
   final AntiCrawlerConfig antiCrawlerConfig;
+
+  /// [my新增] 规则声明取页走「挑战回退」链: 直连命中挑战 (CF/雷池/JS 壳) 时
+  /// 改用隐藏 WebView 取页, 失败再兜底 FlareSolverr。默认 false, 行为不变。
+  final bool webviewFetch;
 }
 
 class PreparedRuleRequest {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:kazumi/modules/search/plugin_search_module.dart';
 import 'package:kazumi/plugins/api_rule_config.dart';
@@ -9,6 +10,8 @@ import 'package:kazumi/services/plugin/api_rule_strategy.dart';
 import 'package:kazumi/services/plugin/plugin_cookie_manager.dart';
 import 'package:kazumi/services/plugin/rule_engine_models.dart';
 import 'package:kazumi/services/plugin/xpath_rule_strategy.dart';
+import 'package:kazumi/services/plugin/webview_page_fetch_service.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 
 abstract interface class RuleRequestExecutor {
   Future<String> execute(
@@ -24,7 +27,9 @@ class RuleEngine {
     ApiRuleStrategy apiStrategy = const ApiRuleStrategy(),
     XPathRuleStrategy xpathStrategy = const XPathRuleStrategy(),
     bool logFailures = true,
-  })  : _requestExecutor = requestExecutor ?? _DefaultRuleRequestExecutor(),
+  })  : _requestExecutor =
+            requestExecutor ?? ChallengeAwareRuleRequestExecutor(
+                _DefaultRuleRequestExecutor()),
         _apiStrategy = apiStrategy,
         _xpathStrategy = xpathStrategy,
         _logFailures = logFailures;
@@ -322,6 +327,114 @@ class RuleEngine {
       error: error,
       stackTrace: stackTrace,
     );
+  }
+}
+
+/// [my新增] 取页兜底双通道全失败 (WebView 不可用 + FlareSolverr 不可用)。
+class ChallengeFetchException implements Exception {
+  const ChallengeFetchException(this.message);
+  final String message;
+  @override
+  String toString() => 'ChallengeFetchException: $message';
+}
+
+/// [my新增] 可注入的挑战取页通道 (单测替换用)。
+typedef WebviewHtmlFetcher = Future<String> Function(String url);
+typedef FlareSolverrHtmlSolver = Future<String> Function(String url);
+
+/// [my新增] 挑战感知执行器: 包裹默认执行器。规则带 webviewFetch 时,
+/// 直连异常或响应命中挑战体 (CF/雷池/JS 壳) → 隐藏 WebView 取页
+/// (3-8s, 挑战自解) → FlareSolverr 兜底 (20-40s) → 双失败抛
+/// [ChallengeFetchException] (由引擎按阶段包装成搜索/取集错误)。
+/// per-host 记忆: 该站直连已确认被挑战后, 后续请求跳过直连直走 WebView。
+/// 不带标志的规则零行为变化 (直通)。
+class ChallengeAwareRuleRequestExecutor implements RuleRequestExecutor {
+  ChallengeAwareRuleRequestExecutor(
+    this._inner, {
+    WebviewHtmlFetcher? webviewFetcher,
+    FlareSolverrHtmlSolver? flareSolverrSolver,
+  })  : _webviewFetcher = webviewFetcher ??
+            ((url) => WebviewPageFetchService.instance.fetchHtml(url)),
+        _flareSolverrSolver = flareSolverrSolver ?? _solveViaFlareSolverr;
+
+  final RuleRequestExecutor _inner;
+  final WebviewHtmlFetcher _webviewFetcher;
+  final FlareSolverrHtmlSolver _flareSolverrSolver;
+
+  /// 会话内 per-host 记忆 (仅被带标志的规则写入)
+  static final Map<String, bool> _hostNeedsFetch = {};
+
+  /// [双层记忆] WebView 对该 host 无效 (如 CF 托管挑战在 WebView2 内不自解):
+  /// 后续请求跳过 WebView 直走 FlareSolverr, 免去每次 15s 等待。
+  static final Set<String> _hostWebviewBroken = {};
+
+  static Future<String> _solveViaFlareSolverr(String url) async {
+    final solution = await FlareSolverrService.solve(url);
+    final html = solution?.html ?? '';
+    if (html.isEmpty) {
+      throw Exception('FlareSolverr 返回空页面');
+    }
+    return html;
+  }
+
+  @override
+  Future<String> execute(
+    PreparedRuleRequest request,
+    RuleExecutionConfig config, {
+    CancelToken? cancelToken,
+  }) async {
+    if (!config.webviewFetch) {
+      return _inner.execute(request, config, cancelToken: cancelToken);
+    }
+    final host = Uri.tryParse(request.url)?.host ?? '';
+    if (!(_hostNeedsFetch[host] ?? false)) {
+      try {
+        final raw =
+            await _inner.execute(request, config, cancelToken: cancelToken);
+        if (!FlareSolverrService.isChallengeBody(raw)) {
+          return raw;
+        }
+        KazumiLogger().i(
+            '挑战回退: ${config.pluginName} 直连命中挑战体 → 隐藏 WebView 取页');
+      } catch (directError) {
+        if (cancelToken?.isCancelled ?? false) rethrow;
+        final msg = directError.toString();
+        KazumiLogger().i(
+            '挑战回退: ${config.pluginName} 直连异常 → 隐藏 WebView 取页 (${msg.substring(0, msg.length > 80 ? 80 : msg.length)})');
+      }
+    } else {
+      KazumiLogger()
+          .d('挑战回退: ${config.pluginName} 命中 per-host 记忆, 跳过直连');
+    }
+    _hostNeedsFetch[host] = true;
+    final webviewBroken = _hostWebviewBroken.contains(host);
+    if (webviewBroken) {
+      KazumiLogger()
+          .d('挑战回退: ${config.pluginName} WebView 已标记失效, 直走 FlareSolverr');
+    }
+    if (!webviewBroken) {
+      try {
+        return await _webviewFetcher(request.url);
+      } on TimeoutException {
+        _hostWebviewBroken.add(host);
+        KazumiLogger().w(
+            '挑战回退: ${config.pluginName} WebView 挑战自解超时, 标记失效 → FlareSolverr');
+      } catch (webviewError) {
+        KazumiLogger().w(
+            '挑战回退: ${config.pluginName} WebView 取页失败 → FlareSolverr 兜底 ($webviewError)');
+        try {
+          return await _flareSolverrSolver(request.url);
+        } catch (fsError) {
+          throw ChallengeFetchException(
+              'WebView 与 FlareSolverr 取页均失败 (webview: $webviewError | fs: $fsError)');
+        }
+      }
+    }
+    try {
+      return await _flareSolverrSolver(request.url);
+    } catch (fsError) {
+      throw ChallengeFetchException('FlareSolverr 兜底失败: $fsError');
+    }
   }
 }
 

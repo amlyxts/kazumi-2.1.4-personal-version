@@ -173,6 +173,24 @@ class FlareSolverrService {
     return _looksChallenged(body);
   }
 
+  /// [my新增] 仅凭响应体的挑战判定 (规则引擎 dio 路径拿到的是纯 HTML, 无
+  /// 头部/状态码可用时用): CF 显性文案 + 雷池 (SafeLine) JS 壳签名 + 体积启发。
+  /// 雷池壳 ~500B, 签名 = JS 跳转 URL 带 ch=1&js= JWT, 体积上限防误伤正常页。
+  static bool isChallengeBody(String html) {
+    if (html.contains('Just a moment') ||
+        html.contains('Attention Required') ||
+        html.contains('cf-challenge') ||
+        html.contains('请稍候') ||
+        html.contains('请等待') ||
+        html.contains('验证您')) {
+      return true;
+    }
+    if (html.contains('ch=1&js=') && html.length < 5000) {
+      return true;
+    }
+    return _looksChallenged(html);
+  }
+
   /// 用持久化 cookies/UA 构造合成 solution (串行闸排队者快速通道
   /// 复用路径): html 为 curl 直取的正页。
   static FlareSolverrSolution _solutionFromCurl(String html) {
@@ -450,9 +468,28 @@ class FlareSolverrService {
           .allMatches(block))
         m.group(1)!.replaceAll('&amp;', '&'),
     };
-    // 兜底: 播放器块无 source 标签时, 找全页直链 mp4
+    // [my新增] MacCMS 系播放页: player_aaaa = {...,"url":"https://...m3u8",...}
+    // (encrypt=0 明文; \/ 转义需还原)
     if (srcs.isEmpty) {
-      srcs.addAll(RegExp(r'https?://[^\s"<>]+\.mp4\?[^"\s<>]+')
+      final macMatch = RegExp(r'player_aaaa\s*=\s*(\{.*?\})\s*[;<]',
+              dotAll: true)
+          .firstMatch(html);
+      if (macMatch != null) {
+        try {
+          final raw = macMatch.group(1)!.replaceAll(r'\/', '/');
+          final obj = jsonDecode(raw);
+          final u = obj is Map ? obj['url']?.toString() ?? '' : '';
+          if (u.startsWith('http')) {
+            KazumiLogger()
+                .i('FlareSolverr: 正片直链 (MacCMS) ${u.indexOf('?') < 0 ? u : u.substring(0, u.indexOf('?'))}');
+            return VideoSource(url: u, offset: offset, type: VideoSourceType.online);
+          }
+        } catch (_) {}
+      }
+    }
+    // 兜底: 播放器块无 source 标签时, 找全页直链 mp4/m3u8
+    if (srcs.isEmpty) {
+      srcs.addAll(RegExp(r'https?://[^\s"<>]+\.(?:mp4|m3u8)[^"\s<>]*')
           .allMatches(html)
           .map((m) => m.group(0)!.replaceAll('&amp;', '&')));
     }

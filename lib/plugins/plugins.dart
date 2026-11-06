@@ -34,6 +34,10 @@ class Plugin {
   // [my修改] 解析走 FlareSolverr (服务端渲染页面直取正片直链, 规避嗅探误抓广告)
   bool resolveViaFlareSolverr;
 
+  /// [my新增] 取页走「挑战回退」链: 直连命中挑战 (CF/雷池/JS 壳) 时改用
+  /// 隐藏 WebView 取页, 失败兜底 FlareSolverr。适用于搜索/章节被挑战挡住的源。
+  bool webviewFetch;
+
   /// Legacy schema field retained for rule import/export compatibility.
   bool useNativePlayer;
   bool usePost;
@@ -62,6 +66,7 @@ class Plugin {
     required this.muliSources,
     required this.useWebview,
     this.resolveViaFlareSolverr = false,
+    this.webviewFetch = false,
     required this.useNativePlayer,
     required this.usePost,
     required this.useLegacyParser,
@@ -94,6 +99,7 @@ class Plugin {
       useWebview: json['useWebview'] as bool? ?? true,
       resolveViaFlareSolverr:
           json['resolveViaFlareSolverr'] as bool? ?? false,
+      webviewFetch: json['webviewFetch'] as bool? ?? false,
       useNativePlayer: json['useNativePlayer'] as bool? ?? true,
       usePost: json['usePost'] ?? false,
       useLegacyParser: json['useLegacyParser'] ?? false,
@@ -165,6 +171,7 @@ class Plugin {
       'muliSources': muliSources,
       'useWebview': useWebview,
       'resolveViaFlareSolverr': resolveViaFlareSolverr,
+      'webviewFetch': webviewFetch,
       'useNativePlayer': useNativePlayer,
       'usePost': usePost,
       'useLegacyParser': useLegacyParser,
@@ -213,6 +220,7 @@ class Plugin {
         searchApiConfig: searchApiConfig,
         chapterApiConfig: chapterApiConfig,
         antiCrawlerConfig: antiCrawlerConfig,
+        webviewFetch: webviewFetch,
       );
 
   Future<RuleSearchTrace> traceSearch(

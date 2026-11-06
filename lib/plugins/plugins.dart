@@ -195,6 +195,9 @@ class Plugin {
 
   bool get requiresNewerClient => int.parse(api) > ApiEndpoints.apiLevel;
 
+  /// [my新增] 体检工具用公开视图 (私有 _executionConfig 的只读复用)
+  RuleExecutionConfig get healthConfig => _executionConfig;
+
   RuleExecutionConfig get _executionConfig => RuleExecutionConfig(
         pluginName: name,
         baseUrl: baseUrl,

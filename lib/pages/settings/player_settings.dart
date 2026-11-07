@@ -12,6 +12,7 @@ import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/bean/settings/settings_list.dart';
 import 'package:kazumi/utils/device.dart';
+import 'package:kazumi/services/skip/skip_time_service.dart';
 
 class PlayerSettingsPage extends StatefulWidget {
   const PlayerSettingsPage({super.key});
@@ -163,6 +164,61 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
     setState(() {
       defaultAspectRatioMode = mode;
     });
+  }
+
+  // [my新增] 错标黑名单管理: 查看/解除
+  Future<void> _showSkipBlacklist() async {
+    await KazumiDialog.show(
+      builder: (context) {
+        var entries =
+            SkipTimeService.loadBlacklist().entries.toList();
+        return AlertDialog(
+          title: Text('错标黑名单 (${entries.length})'),
+          content: entries.isEmpty
+              ? const Text('空 — 播放时在跳过操作条上点两次可将错标拉黑')
+              : SizedBox(
+                  width: 400,
+                  height: 300,
+                  child: StatefulBuilder(
+                      builder: (context, setDialogState) {
+                    return ListView.builder(
+                      itemCount: entries.length,
+                      itemBuilder: (context, index) {
+                        final skipId = entries[index].key;
+                        final m = entries[index].value;
+                        final type =
+                            (m['type'] ?? '').toString() == 'ed' ? 'ED' : 'OP';
+                        return ListTile(
+                          dense: true,
+                          title: Text(
+                              '${m['seriesName'] ?? '未知'} 第${m['episode']}集 '
+                              '$type ${(m['start'] as num?)?.toInt() ?? 0}'
+                              '-${(m['end'] as num?)?.toInt() ?? 0}s',
+                              style: const TextStyle(fontSize: 13)),
+                          trailing: TextButton(
+                            child: const Text('解除'),
+                            onPressed: () {
+                              SkipTimeService.removeBlacklist(skipId);
+                              setDialogState(() {
+                                entries.removeWhere(
+                                    (e) => e.key == skipId);
+                              });
+                            },
+                          ),
+                        );
+                      },
+                    );
+                  }),
+                ),
+          actions: [
+            TextButton(
+              onPressed: () => KazumiDialog.dismiss(),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   /// [my新增] 跳过镜像编辑: 地址+token 同框填写; 「清除」一键置空两键
@@ -457,6 +513,14 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                 title: Text('片尾手动跳过秒数'),
                 description: Text('无社区数据时跳过结尾 N 秒 (当前: '
                     '$autoSkipEdManualSeconds 秒, 0 为不跳)'),
+              ),
+              // [my新增] 错标黑名单管理
+              SettingsTile(
+                leading: Icons.block_rounded,
+                onPressed: (_) => _showSkipBlacklist(),
+                title: Text('错标黑名单 (${SkipTimeService.loadBlacklist().length})'),
+                description: const Text(
+                    '播放时在跳过操作条上拉黑的错误区间 (点击解除恢复自动跳过)'),
               ),
               // [my新增] 自建镜像 (iOS 无代理环境): 地址+token 同框填写,
               // 三端通用; 清除/留空维持直连/走代理

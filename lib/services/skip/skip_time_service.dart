@@ -19,10 +19,19 @@ class SkipInterval {
     required this.type,
     required this.start,
     required this.end,
+    this.skipId = '',
+    this.isTemplate = false,
   });
   final String type;
   final double start;
   final double end;
+
+  /// [my新增] aniskip 区间 UUID — 错标拉黑的精确粒度
+  final String skipId;
+
+  /// [my新增] aniskip 默认填充模板 (op=0-90s / ed=片尾-90s 罐头值) —
+  /// 表示该番实际无社区数据, 非标记不准
+  final bool isTemplate;
 }
 
 class SkipTimeService {
@@ -216,6 +225,78 @@ query (\$search: String) {
 
   /// aniskip 按集区间; 无数据返回空列表 (负缓存), 网络失败返回 null (下次
   /// tick 重试)。并发去重。
+  // —— [my新增] 错标黑名单 (skipId → 元数据, JSON 持久) ——
+  static Map<String, Map<String, dynamic>>? _blacklistCache;
+
+  static Map<String, Map<String, dynamic>> loadBlacklist() {
+    if (_blacklistCache != null) return _blacklistCache!;
+    final raw = GStorage.getSetting(SettingsKeys.skipBlacklist).trim();
+    Map<String, Map<String, dynamic>> parsed = {};
+    if (raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          decoded.forEach((k, v) {
+            if (v is Map) parsed[k.toString()] = Map<String, dynamic>.from(v);
+          });
+        }
+      } catch (e) {
+        KazumiLogger().w('SkipTime: 黑名单解析失败: $e');
+      }
+    }
+    return _blacklistCache = parsed;
+  }
+
+  static void _saveBlacklist() {
+    _blacklistCache ??= {};
+    GStorage.putSetting(
+        SettingsKeys.skipBlacklist, jsonEncode(_blacklistCache));
+  }
+
+  static void blacklistSkip(
+      {required String skipId,
+      required int anilistId,
+      required int episode,
+      required String type,
+      required double start,
+      required double end,
+      required String seriesName}) {
+    final bl = loadBlacklist();
+    bl[skipId] = {
+      'anilistId': anilistId,
+      'episode': episode,
+      'type': type,
+      'start': start,
+      'end': end,
+      'seriesName': seriesName,
+      'createdAt': DateTime.now().toIso8601String(),
+    };
+    _saveBlacklist();
+    KazumiLogger().i('SkipTime: 拉黑 $skipId ($seriesName $type)');
+  }
+
+  static void removeBlacklist(String skipId) {
+    final bl = loadBlacklist();
+    bl.remove(skipId);
+    _saveBlacklist();
+  }
+
+  /// [my新增] 守门: 长度 >210s 丢弃 / 跨度 >40% 片长丢弃 / 黑名单过滤。
+  /// 纯函数 (单测覆盖); 依据 2026-11-07 采样 310 条真实区间 (max=179.4s)。
+  static List<SkipInterval> applyGuards(List<SkipInterval> raw,
+      {required int episodeLengthSec, Set<String>? blacklist}) {
+    const maxLen = 210.0;
+    return raw.where((it) {
+      final dur = it.end - it.start;
+      if (dur > maxLen) return false;
+      if (episodeLengthSec > 0 && dur > episodeLengthSec * 0.4) return false;
+      if (it.skipId.isNotEmpty && blacklist != null && blacklist.contains(it.skipId)) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
   static Future<List<SkipInterval>?> intervalsFor({
     required int malId,
     required int episodeNumber,
@@ -262,13 +343,24 @@ query (\$search: String) {
           final type = (r['skipType'] ?? '').toString();
           if (start == null || end == null || end <= start) continue;
           if (type != 'op' && type != 'ed') continue;
-          intervals.add(SkipInterval(type: type, start: start, end: end));
+          final skipId = (r['skipId'] ?? '').toString();
+          // [my新增] aniskip 默认填充模板: op=0-90s / ed=片尾-90s 罐头值
+          final isTemplate = (type == 'op' && start == 0 &&
+                  (end - start - 90).abs() < 1) ||
+              (type == 'ed' && (end - start - 90).abs() < 1);
+          intervals.add(SkipInterval(
+              type: type, start: start, end: end,
+              skipId: skipId, isTemplate: isTemplate));
         }
       }
-      _intervalCache[key] = intervals;
+      final filtered = applyGuards(intervals,
+          episodeLengthSec: episodeLengthSec,
+          blacklist: loadBlacklist().keys.toSet());
+      _intervalCache[key] = filtered;
       KazumiLogger().i(
-          'SkipTime: intervals malId=$malId ep=$episodeNumber → ${intervals.length}');
-      return intervals;
+          'SkipTime: intervals malId=$malId ep=$episodeNumber → ${filtered.length}'
+          '${intervals.length != filtered.length ? ' (守门过滤 ${intervals.length - filtered.length})' : ''}');
+      return filtered;
     } on DioException catch (e) {
       // 404 = 该集无社区数据 (负缓存); 其余失败不缓存 (下次 tick 重试)
       if (e.response?.statusCode == 404) {

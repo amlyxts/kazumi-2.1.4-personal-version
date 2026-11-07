@@ -127,6 +127,13 @@ class SettingsKeys {
     '',
     group: SettingGroup.player,
   );
+  /// [my新增] 跳过区间错标黑名单 (SkipTimeService 用, JSON: skipId → 元数据;
+  /// 非用户设置, 派生数据; 不注册 all → 不云同步)
+  static const skipBlacklist = SettingKey<String>(
+    'skipBlacklist',
+    '',
+    group: SettingGroup.player,
+  );
   /// bgm 原名 → MAL id 映射持久缓存 (SkipTimeService 用, 每番一条; 非用户
   /// 设置, 派生数据; 不注册 all → 不云同步)
   static const skipTimeIdMap = SettingKey<String>(

@@ -82,7 +82,18 @@ class _PlayerItemState extends State<PlayerItem>
 
   // [my新增] 自动跳过片头片尾: 切集复位的首跳提示 + 集号跟踪
   int? _autoSkipEpisode;
-  bool _autoSkipToastShown = false;
+  // [my新增] 跳过操作条 (方案B两步式: 撤销 → 拉黑) 状态
+  bool _skipChipVisible = false;
+  bool _skipChipMorphed = false;
+  Timer? _skipChipTimer;
+  double _skipChipPrePosMs = 0;
+  double _skipChipStartSec = 0;
+  double _skipChipEndSec = 0;
+  String _skipChipSkipId = '';
+  String _skipChipTypeLabel = '';
+  int _skipChipMalId = 0;
+  int _skipChipEpisode = 0;
+  String _skipChipSeriesName = '';
   bool _autoSkipNoDataLogged = false;
   final HistoryController historyController = inject<HistoryController>();
   final MyController myController = inject<MyController>();
@@ -613,8 +624,9 @@ class _PlayerItemState extends State<PlayerItem>
       final episode = videoPageController.playbackEpisode.episode;
       if (episode != _autoSkipEpisode) {
         _autoSkipEpisode = episode;
-        _autoSkipToastShown = false;
         _autoSkipNoDataLogged = false;
+        _skipChipTimer?.cancel();
+        _skipChipVisible = false;
       }
       final item = videoPageController.bangumiItem;
       // [my修复] 用原名 (日文/罗马字) 检索 AniList —— nameCn 中文 AniList
@@ -641,14 +653,17 @@ class _PlayerItemState extends State<PlayerItem>
 
       Duration? target;
       var skipType = '';
+      SkipInterval? fired;
       if (intervals != null && intervals.isNotEmpty) {
         for (final it in intervals) {
           if (it.end > durationSec * 1.2) continue; // 数据异常
           final startMs = it.start * 1000;
           final endMs = it.end * 1000;
-          if (posMs >= startMs && posMs < endMs - 500) {
-            target = Duration(milliseconds: endMs.round());
+          // [my新增] 对称收口: 起点延迟 1s (起点偏早少切) + 落点回退 1s (终点偏晚少切)
+          if (posMs >= startMs + 1000 && posMs < endMs - 1000) {
+            target = Duration(milliseconds: (endMs - 1000).round());
             skipType = it.type;
+            fired = it;
             break;
           }
         }
@@ -681,14 +696,79 @@ class _PlayerItemState extends State<PlayerItem>
         }        return;
       }
       await playerController.seek(target);
-      if (!_autoSkipToastShown && mounted) {
-        _autoSkipToastShown = true;
-        KazumiDialog.showToast(
-            message: skipType == 'ed' ? '已自动跳过片尾' : '已自动跳过片头');
+      // [my新增] 操作条 (方案B): 撤销跳过 → (变形) 拉黑此标记
+      if (mounted) {
+        _showSkipChip(
+          preSkipPosMs: posMs.toDouble(),
+          startSec: fired?.start ?? 0.0,
+          endSec: fired?.end ?? 0.0,
+          skipId: fired?.skipId ?? '',
+          skipType: skipType,
+          malId: malId ?? 0,
+          episode: episode,
+          seriesName: subjectName,
+        );
       }
     } catch (_) {
       // 判定/取数失败静默 (计时器下一轮重试或放弃)
     }
+  }
+
+  // —— [my新增] 跳过操作条 ——
+
+  void _showSkipChip(
+      {required double preSkipPosMs,
+      required double startSec,
+      required double endSec,
+      required String skipId,
+      required String skipType,
+      required int malId,
+      required int episode,
+      required String seriesName}) {
+    _skipChipTimer?.cancel();
+    setState(() {
+      _skipChipVisible = true;
+      _skipChipMorphed = false;
+      _skipChipPrePosMs = preSkipPosMs;
+      _skipChipStartSec = startSec;
+      _skipChipEndSec = endSec;
+      _skipChipSkipId = skipId;
+      _skipChipMalId = malId;
+      _skipChipEpisode = episode;
+      _skipChipSeriesName = seriesName;
+      _skipChipTypeLabel = skipType == 'ed' ? 'ED' : 'OP';
+    });
+    _skipChipTimer = Timer(const Duration(seconds: 8), () {
+      if (mounted) setState(() => _skipChipVisible = false);
+    });
+  }
+
+  void _undoSkip() {
+    unawaited(playerController
+        .seek(Duration(milliseconds: _skipChipPrePosMs.round())));
+    _skipChipTimer?.cancel();
+    setState(() => _skipChipMorphed = true);
+    _skipChipTimer = Timer(const Duration(seconds: 8), () {
+      if (mounted) setState(() => _skipChipVisible = false);
+    });
+  }
+
+  void _blacklistSkipChip() {
+    if (_skipChipSkipId.isNotEmpty) {
+      SkipTimeService.blacklistSkip(
+        skipId: _skipChipSkipId,
+        anilistId: _skipChipMalId,
+        episode: _skipChipEpisode,
+        type: _skipChipTypeLabel == 'ED' ? 'ed' : 'op',
+        start: _skipChipStartSec,
+        end: _skipChipEndSec,
+        seriesName: _skipChipSeriesName,
+      );
+    }
+    unawaited(playerController
+        .seek(Duration(milliseconds: _skipChipPrePosMs.round())));
+    _skipChipTimer?.cancel();
+    if (mounted) setState(() => _skipChipVisible = false);
   }
 
   Future<void> _syncHistoryWithWebDav() async {
@@ -797,6 +877,7 @@ class _PlayerItemState extends State<PlayerItem>
     _progressBarDragHold?.release();
     _progressBarDragHold = null;
     playerTimer?.cancel();
+    _skipChipTimer?.cancel();
     playerController.seeking.beginInteractiveSeek();
   }
 
@@ -1635,6 +1716,30 @@ class _PlayerItemState extends State<PlayerItem>
                         animation: _screenshotFeedbackAnimation,
                       ),
                     ),
+                    if (_skipChipVisible)
+                      Positioned(
+                        top: 76,
+                        right: 16,
+                        child: Material(
+                          color: Colors.black.withOpacity(0.72),
+                          borderRadius: BorderRadius.circular(10),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(10),
+                            onTap: _skipChipMorphed ? _blacklistSkipChip : _undoSkip,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
+                              child: Text(
+                                _skipChipMorphed
+                                    ? '这个标记有问题？点击拉黑，不再自动跳'
+                                    : '已自动跳过 $_skipChipTypeLabel · 点击撤销',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 13),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     (Platform.isAndroid &&
                             (videoPageController.isPip || _pipEnterRequested))
                         ? const SizedBox.shrink()

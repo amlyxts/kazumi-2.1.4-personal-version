@@ -77,7 +77,20 @@ class RuleEngine {
       final parsed = config.searchMode == RuleMode.api
           ? _apiStrategy.parseSearch(raw, config.searchApiConfig)
           : _xpathStrategy.parseSearch(raw, config);
-      if (parsed.items.isEmpty) {
+      // [my新增] 严格匹配过滤: 模糊站噪声治理 — 标题含关键词者优先保留;
+      // 过滤后为空则回退全量 (模糊匹配或许是用户想要的变体, 永不更差)。
+      var items = parsed.items;
+      final kw = keyword.trim();
+      if (config.strictSearchMatch && kw.isNotEmpty && items.length > 1) {
+        final matched =
+            items.where((e) => e.name.contains(kw)).toList();
+        // 严格语义: 全无命中 = 该站确无此内容 (模糊站无结果时灌推荐位),
+        // 直接 NoResult; 有命中但非全部 → 只留命中。
+        KazumiLogger().i(
+            '严格匹配: ${config.pluginName} ${items.length} → ${matched.length} 条');
+        items = matched;
+      }
+      if (items.isEmpty) {
         throw NoResultException(config.pluginName);
       }
       _logDiagnostics(config, 'search', parsed.diagnostics);
@@ -85,7 +98,7 @@ class RuleEngine {
         rawResponse: raw,
         response: PluginSearchResponse(
           pluginName: config.pluginName,
-          data: parsed.items,
+          data: items,
         ),
         matchedFragments: parsed.matchedFragments,
         diagnostics: parsed.diagnostics,

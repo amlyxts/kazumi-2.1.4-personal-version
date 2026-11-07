@@ -56,17 +56,17 @@ void main() {
       calls = [];
     });
 
-    RuleRequestExecutor _innerReturning(String html) {
+    RuleRequestExecutor innerReturning(String html) {
       return _FakeInner(html, calls);
     }
 
-    RuleRequestExecutor _innerThrowing() {
+    RuleRequestExecutor innerThrowing() {
       return _FakeThrowingInner(calls);
     }
 
     test('无标志规则: 直连结果直通, 即使命中挑战体也不回退', () async {
       final exec = ChallengeAwareRuleRequestExecutor(
-        _innerReturning(_cfHtml),
+        innerReturning(_cfHtml),
         webviewFetcher: (url) async {
           calls.add('webview');
           return 'webview-html';
@@ -87,7 +87,7 @@ void main() {
 
     test('有标志 + 直连正常: 直通不回退', () async {
       final exec = ChallengeAwareRuleRequestExecutor(
-        _innerReturning(_okHtml),
+        innerReturning(_okHtml),
         webviewFetcher: (url) async {
           calls.add('webview');
           return 'webview-html';
@@ -105,7 +105,7 @@ void main() {
 
     test('有标志 + 直连挑战体: WebView 接管', () async {
       final exec = ChallengeAwareRuleRequestExecutor(
-        _innerReturning(_cfHtml),
+        innerReturning(_cfHtml),
         webviewFetcher: (url) async {
           calls.add('webview');
           return 'webview-html';
@@ -125,7 +125,7 @@ void main() {
 
     test('有标志 + 直连异常: WebView 接管; WebView 失败再 FS 兜底', () async {
       final exec = ChallengeAwareRuleRequestExecutor(
-        _innerThrowing(),
+        innerThrowing(),
         webviewFetcher: (url) async {
           calls.add('webview');
           throw Exception('webview 不可用');
@@ -145,7 +145,7 @@ void main() {
 
     test('双通道全失败: 抛 ChallengeFetchException', () async {
       final exec = ChallengeAwareRuleRequestExecutor(
-        _innerThrowing(),
+        innerThrowing(),
         webviewFetcher: (url) async {
           throw Exception('webview 不可用');
         },
@@ -176,6 +176,62 @@ void main() {
       final raw = await exec.execute(req, cfg);
       expect(innerCalls, 1, reason: 'per-host 记忆后不应再撞直连');
       expect(raw, 'webview-html');
+    });
+  });
+
+  group('RuleEngine strictSearchMatch', () {
+    const mixedHtml =
+        '<html><body><ul>'
+        '<li><a href="/v/1">凡人修仙传【国语】</a></li>'
+        '<li><a href="/v/2">伤物语〈Ⅰ 铁血篇〉</a></li>'
+        '<li><a href="/v/3">物之古物奇谭</a></li>'
+        '<li><a href="/v/4">伤物语〈Ⅱ 热血篇〉</a></li>'
+        '</ul></body></html>';
+
+    RuleExecutionConfig makeCfg(bool strict) => RuleExecutionConfig(
+          pluginName: 't',
+          baseUrl: 'https://t.example/',
+          usePost: false,
+          searchMode: 'xpath',
+          chapterMode: 'xpath',
+          searchUrl: 'https://t.example/s?q=@keyword',
+          searchList: '//li',
+          searchName: './/a',
+          searchResult: './/a',
+          chapterRoads: '//ul',
+          chapterResult: '//li/a',
+          searchApiConfig: ApiSearchConfig(),
+          chapterApiConfig: ApiChapterConfig(),
+          antiCrawlerConfig: AntiCrawlerConfig.empty(),
+          strictSearchMatch: strict,
+        );
+
+    test('开启严格匹配: 只留含关键词条目', () async {
+      final engine = RuleEngine(
+        requestExecutor: _FakeInner(mixedHtml, []),
+      );
+      final trace = await engine.search(makeCfg(true), '伤物语');
+      expect(trace.response.data.length, 2);
+      expect(
+          trace.response.data.every((e) => e.name.contains('伤物语')), isTrue);
+    });
+
+    test('全无命中: 严格语义 NoResult (模糊站灌推荐位噪声治理)', () async {
+      final engine = RuleEngine(
+        requestExecutor: _FakeInner(mixedHtml, []),
+      );
+      await expectLater(
+        engine.search(makeCfg(true), '黑执事'),
+        throwsA(isA<NoResultException>()),
+      );
+    });
+
+    test('未开严格匹配: 行为不变', () async {
+      final engine = RuleEngine(
+        requestExecutor: _FakeInner(mixedHtml, []),
+      );
+      final trace = await engine.search(makeCfg(false), '伤物语');
+      expect(trace.response.data.length, 4);
     });
   });
 }

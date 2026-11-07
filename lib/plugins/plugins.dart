@@ -38,6 +38,9 @@ class Plugin {
   /// 隐藏 WebView 取页, 失败兜底 FlareSolverr。适用于搜索/章节被挑战挡住的源。
   bool webviewFetch;
 
+  /// [my新增] 搜索结果严格匹配 (模糊站噪声治理, 见 RuleExecutionConfig 注释)。
+  bool strictSearchMatch;
+
   /// Legacy schema field retained for rule import/export compatibility.
   bool useNativePlayer;
   bool usePost;
@@ -67,6 +70,7 @@ class Plugin {
     required this.useWebview,
     this.resolveViaFlareSolverr = false,
     this.webviewFetch = false,
+    this.strictSearchMatch = false,
     required this.useNativePlayer,
     required this.usePost,
     required this.useLegacyParser,
@@ -100,6 +104,7 @@ class Plugin {
       resolveViaFlareSolverr:
           json['resolveViaFlareSolverr'] as bool? ?? false,
       webviewFetch: json['webviewFetch'] as bool? ?? false,
+      strictSearchMatch: json['strictSearchMatch'] as bool? ?? false,
       useNativePlayer: json['useNativePlayer'] as bool? ?? true,
       usePost: json['usePost'] ?? false,
       useLegacyParser: json['useLegacyParser'] ?? false,
@@ -172,6 +177,7 @@ class Plugin {
       'useWebview': useWebview,
       'resolveViaFlareSolverr': resolveViaFlareSolverr,
       'webviewFetch': webviewFetch,
+      'strictSearchMatch': strictSearchMatch,
       'useNativePlayer': useNativePlayer,
       'usePost': usePost,
       'useLegacyParser': useLegacyParser,
@@ -221,6 +227,7 @@ class Plugin {
         chapterApiConfig: chapterApiConfig,
         antiCrawlerConfig: antiCrawlerConfig,
         webviewFetch: webviewFetch,
+        strictSearchMatch: strictSearchMatch,
       );
 
   Future<RuleSearchTrace> traceSearch(

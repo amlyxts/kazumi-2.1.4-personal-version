@@ -11,6 +11,9 @@ import 'package:kazumi/modules/collect/collect_layout.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/services/bgm/bgm_web_service.dart';
+import 'package:kazumi/services/skip/skip_time_service.dart';
+import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/pages/direct_search/series_detector.dart';
 import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/adult_collect/adult_random_pick_sheet.dart';
@@ -188,6 +191,11 @@ class _AdultCollectPageState extends State<AdultCollectPage>
             icon: const Icon(Icons.ios_share_rounded),
             onPressed: _exportCollectibles,
           ),
+          IconButton(
+            tooltip: 'bgm 关联 (自动匹配元数据)',
+            icon: const Icon(Icons.auto_awesome_rounded),
+            onPressed: _showBgmAssociate,
+          ),
         ],
       ),
       body: SafeArea(
@@ -246,6 +254,164 @@ class _AdultCollectPageState extends State<AdultCollectPage>
       KazumiLogger().w('AdultCollect: export failed', error: e);
       if (mounted) KazumiDialog.showToast(message: '导出失败，请稍后重试');
     }
+  }
+
+  // —— [my新增] bgm 关联 (cookie 网页搜索自动匹配 + 手动 ID + 管理) ——
+
+  final TextEditingController _bgmCookieController = TextEditingController();
+  String _bgmMatchProgress = '';
+
+  Future<void> _showBgmAssociate() async {
+    _bgmCookieController.text =
+        GStorage.getSetting(SettingsKeys.bgmWebCookie).trim();
+    await KazumiDialog.show(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final map = BgmWebService.loadMap();
+          final cookie = _bgmCookieController.text.trim();
+          final unmapped = _collectController.collectibles
+              .where((c) =>
+                  c.section == 1 &&
+                  !map.containsKey(c.bangumiItem.id.toString()))
+              .toList();
+          return AlertDialog(
+            title: const Text('bgm 关联 (里番)'),
+            content: SizedBox(
+              width: 460,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('bgm.tv 网页 cookie (登录态):',
+                      style: TextStyle(fontSize: 12)),
+                  TextField(
+                    controller: _bgmCookieController,
+                    maxLines: 2,
+                    style: const TextStyle(fontSize: 11),
+                    decoration: const InputDecoration(
+                        hintText:
+                            '浏览器登录 bgm.tv → F12 → Network → 任意请求 → 复制 Cookie 头整串'),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    ElevatedButton(
+                      onPressed: () {
+                        GStorage.putSetting(SettingsKeys.bgmWebCookie,
+                            _bgmCookieController.text.trim());
+                        KazumiDialog.showToast(message: 'cookie 已保存');
+                      },
+                      child: const Text('保存 cookie'),
+                    ),
+                    const SizedBox(width: 10),
+                    ElevatedButton(
+                      onPressed: cookie.isEmpty
+                          ? null
+                          : () async {
+                              setDialogState(
+                                  () => _bgmMatchProgress = '匹配中…');
+                              var done = 0;
+                              for (final c in unmapped) {
+                                final key =
+                                    c.bangumiItem.id.toString();
+                                final title = c.bangumiItem.nameCn
+                                        .isNotEmpty
+                                    ? c.bangumiItem.nameCn
+                                    : c.bangumiItem.name;
+                                try {
+                                  final cands = await BgmWebService.search(
+                                      title);
+                                  BgmWebSubject? best;
+                                  var bestScore = 0.0;
+                                  for (final cand in cands) {
+                                    final s1 = SkipTimeService.similarity(
+                                        title, cand.name);
+                                    final s2 = SkipTimeService.similarity(
+                                        c.bangumiItem.nameCn, cand.name);
+                                    final sc = s1 > s2 ? s1 : s2;
+                                    if (sc > bestScore) {
+                                      bestScore = sc;
+                                      best = cand;
+                                    }
+                                  }
+                                  if (best != null && bestScore >= 0.5) {
+                                    final info =
+                                        await BangumiApi.getBangumiInfoByID(
+                                            best.id);
+                                    if (info != null) {
+                                      BgmWebService.associate(key,
+                                          bgmId: best.id,
+                                          nameCn: info.nameCn,
+                                          name: info.name,
+                                          score: info.ratingScore,
+                                          coverUrl: (info.images['large'] ?? info.images['common'] ?? ''));
+                                      done++;
+                                    }
+                                  }
+                                } catch (_) {}
+                                setDialogState(() =>
+                                    _bgmMatchProgress = '匹配中… $done/${unmapped.length} (${c.bangumiItem.nameCn})');
+                              }
+                              setDialogState(() => _bgmMatchProgress =
+                                  '完成: 新关联 $done 条');
+                            },
+                      child: Text(unmapped.isEmpty
+                          ? '无未关联条目'
+                          : '自动匹配 (${unmapped.length} 条)'),
+                    ),
+                  ]),
+                  if (_bgmMatchProgress.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(_bgmMatchProgress,
+                          style: const TextStyle(fontSize: 12)),
+                    ),
+                  const Divider(height: 20),
+                  const Text('已关联:', style: TextStyle(fontSize: 12)),
+                  SizedBox(
+                    height: 200,
+                    child: map.isEmpty
+                        ? const Text('暂无',
+                            style: TextStyle(fontSize: 12))
+                        : ListView.builder(
+                            itemCount: map.length,
+                            itemBuilder: (context, index) {
+                              final key = map.keys.elementAt(index);
+                              final m = map[key]!;
+                              return ListTile(
+                                dense: true,
+                                title: Text(
+                                    '${m['nameCn'] ?? m['name'] ?? '?'} (评分 ${m['score']})',
+                                    style: const TextStyle(fontSize: 13)),
+                                subtitle: Text('bgm ${m['bgmId']}',
+                                    style: const TextStyle(fontSize: 11)),
+                                trailing: TextButton(
+                                  child: const Text('解除'),
+                                  onPressed: () {
+                                    BgmWebService.removeAssociation(key);
+                                    setDialogState(() {});
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  _collectController.loadCollectibles();
+                  KazumiDialog.dismiss();
+                  if (mounted) setState(() {});
+                },
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _changeType(BangumiItem item, CollectType type) async {    if (type == CollectType.none) {

@@ -702,6 +702,19 @@ class SettingsKeys {
     '',
     group: SettingGroup.collect,
   );
+  // [my新增] 里番区 bgm 关联映射 (JSON: 收藏键 → {bgmId, nameCn, score})
+  // bgm API 搜索端点屏蔽 nsfw (合规), 故用网页 cookie 搜索 + 按 ID 直取
+  static const adultBgmMap = SettingKey<String>(
+    'adultBgmMap',
+    '',
+    group: SettingGroup.collect,
+  );
+  // [my新增] bgm.tv 网页 cookie (里番 bgm 关联自动化用, 用户从浏览器提取)
+  static const bgmWebCookie = SettingKey<String>(
+    'bgmWebCookie',
+    '',
+    group: SettingGroup.collect,
+  );
   static const downloadDanmaku = SettingKey<bool>(
     _SettingBoxKey.downloadDanmaku,
     true,

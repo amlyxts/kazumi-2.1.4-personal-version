@@ -9,6 +9,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
+import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/request/core/network_config.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -126,21 +127,61 @@ class SkipTimeService {
     required bool isBgmSubject,
     required int subjectId,
     required String fallbackName,
+    String itemTitleCn = '',
   }) async {
     _loadMalIdCache();
     if (!isBgmSubject || subjectId <= 0) {
       return resolveMalId(fallbackName);
     }
-    final bgmKey = 'bgmv2:$subjectId'; // v2: 相似度保留尾标点后重解析,
-    // 旧 'bgm:' 键的错季映射 (3736→7791) 不再读取
+    final bgmKey = 'bgmv3:$subjectId'; // v3: bgm id 错挂校验 + bgm 搜索重定位
+    // (v2 键的错挂映射如 103010→38062 不再读取)
     if (_malIdCache.containsKey(bgmKey)) return _malIdCache[bgmKey];
     if (_bgmNoMatch.contains(bgmKey)) return null;
     try {
-      final info = await BangumiApi.getBangumiInfoByID(subjectId);
-      final name = info?.name.trim() ?? '';
+      var info = await BangumiApi.getBangumiInfoByID(subjectId);
+      var name = info?.name.trim() ?? '';
       if (name.isEmpty) {
         _bgmNoMatch.add(bgmKey);
         return null;
+      }
+      // [my修复] bgm id 错挂校验: 源站条目的 bangumi id 可能指向完全无关
+      // 的番 (实测 ezdmw 药屋S3 → bgm 103010 赛博格クロちゃん), 表现为
+      // 跳过区间张冠李戴。校验 = 条目中文标题 vs bgm 名称(name_cn/name)
+      // 相似度 <0.5 → 用条目标题走 bgm 搜索重定位。
+      final cnTitle = itemTitleCn.trim();
+      if (cnTitle.isNotEmpty) {
+        final simCn = similarity(cnTitle, (info?.nameCn ?? '').trim());
+        final simJp = similarity(cnTitle, name);
+        final sim = simCn > simJp ? simCn : simJp;
+        if (sim < 0.5) {
+          KazumiLogger().w(
+              'SkipTime: bgm:$subjectId 错挂嫌疑 (相似度 ${sim.toStringAsFixed(2)}) → bgm 搜索重定位');
+          final page = await BangumiApi.bangumiSearch(cnTitle);
+          BangumiItem? best;
+          var bestScore = 0.0;
+          for (final b in page?.items ?? const <BangumiItem>[]) {
+            final s1 = similarity(cnTitle, b.nameCn.trim());
+            final s2 = similarity(cnTitle, b.name.trim());
+            final sc = s1 > s2 ? s1 : s2;
+            if (sc > bestScore) {
+              bestScore = sc;
+              best = b;
+            }
+          }
+          if (best == null || bestScore < 0.5) {
+            _bgmNoMatch.add(bgmKey);
+            return null;
+          }
+          final info2 = await BangumiApi.getBangumiInfoByID(best.id);
+          if (info2 == null || info2.name.trim().isEmpty) {
+            _bgmNoMatch.add(bgmKey);
+            return null;
+          }
+          info = info2;
+          name = info2.name.trim();
+          KazumiLogger().i(
+              'SkipTime: bgm 重定位 $subjectId → ${best.id} (${best.nameCn}) dice=${bestScore.toStringAsFixed(2)}');
+        }
       }
       final malId = await _anilistSearch(name);
       if (malId != null) {

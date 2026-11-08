@@ -642,6 +642,7 @@ class _PlayerItemState extends State<PlayerItem>
         isBgmSubject: !CollectSectionRepair.isDirectSourceItem(item),
         subjectId: item.id,
         fallbackName: subjectName,
+        itemTitleCn: item.nameCn,
       );
       if (malId != null) {
         intervals = await SkipTimeService.intervalsFor(

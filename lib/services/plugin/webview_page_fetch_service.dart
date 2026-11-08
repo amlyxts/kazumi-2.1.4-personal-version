@@ -56,6 +56,18 @@ class WebviewPageFetchService {
           ? await _fetchWindows(url, deadline)
           : await _fetchMobile(url, deadline);
       KazumiLogger().i('WebviewFetch: 成功 len=${html.length}');
+      // [my诊断] KAZUMI_SKIP_DUMP=<dir> 时落盘渲染后 HTML (选择器修复取证)
+      final dumpDir = Platform.environment['KAZUMI_SKIP_DUMP'];
+      if (dumpDir != null && dumpDir.isNotEmpty) {
+        try {
+          final u = Uri.parse(url);
+          var safe = '${u.host}${u.path.replaceAll('/', '_')}';
+          safe = safe.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '');
+          if (safe.length > 80) safe = safe.substring(0, 80);
+          File('$dumpDir/${safe}_${u.hashCode.abs() % 10000}.html')
+              .writeAsStringSync(html, flush: true);
+        } catch (_) {}
+      }
       return html;
     } catch (e) {
       KazumiLogger().w('WebviewFetch: 失败 $url: $e');

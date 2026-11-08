@@ -39,6 +39,9 @@ void main() {
       await GStorage.init();
       // ignore: avoid_print
       print('WL_EXTRA=[${GStorage.getSetting(SettingsKeys.proxyWhitelistExtra)}]');
+      final tk = GStorage.getSetting(SettingsKeys.skipMirrorToken);
+      print('PC_TOKEN_FP=[${tk.isEmpty ? '<empty>' : tk.substring(0, 4)}] len=${tk.length}');
+      print('PC_MIRROR_BASE=[${GStorage.getSetting(SettingsKeys.skipMirrorBase)}]');
       // ignore: avoid_print
       print('DS_SITE=[${GStorage.getSetting(SettingsKeys.directSearchSite)}]');
     });

@@ -315,65 +315,81 @@ query (\$search: String) {
 
   static Future<List<SkipInterval>> _intervalsRemote(
       int malId, int episodeNumber, int episodeLengthSec, String key) async {
-    try {
-      final mirror = _mirror;
-      final resp = await _dio.get(
-        mirror == null
-            ? 'https://api.aniskip.com/v2/skip-times/$malId/$episodeNumber'
-            : '${mirror.$1}/skip/aniskip/v2/skip-times/$malId/$episodeNumber',
-        queryParameters: {
-          'types': ['op', 'ed'],
-          'episodeLength': episodeLengthSec,
-        },
-        options: mirror == null
-            ? null
-            : Options(headers: {'X-Skip-Token': mirror.$2}),
-      );
-      final data = resp.data;
-      final found = data is Map && data['found'] == true;
-      final results =
-          (data is Map ? data['results'] as List? : null) ?? const [];
-      final intervals = <SkipInterval>[];
-      if (found) {
-        for (final r in results) {
-          final interval = r is Map ? r['interval'] : null;
-          if (interval is! Map) continue;
-          final start = (interval['startTime'] as num?)?.toDouble();
-          final end = (interval['endTime'] as num?)?.toDouble();
-          final type = (r['skipType'] ?? '').toString();
-          if (start == null || end == null || end <= start) continue;
-          if (type != 'op' && type != 'ed') continue;
-          final skipId = (r['skipId'] ?? '').toString();
-          // [my新增] aniskip 默认填充模板: op=0-90s / ed=片尾-90s 罐头值
-          final isTemplate = (type == 'op' && start == 0 &&
-                  (end - start - 90).abs() < 1) ||
-              (type == 'ed' && (end - start - 90).abs() < 1);
-          intervals.add(SkipInterval(
-              type: type, start: start, end: end,
-              skipId: skipId, isTemplate: isTemplate));
+    final mirror = _mirror;
+    // [my新增] 片长阶梯: aniskip 匹配对传入片长敏感 (实测容差 ±40-60s,
+    // 窗口内结果集还会变化) — 404 时逐档重试可救回「有数据但片长擦边」
+    // 的假阴性 (实测 One Piece: 1380 无数据, 1396-1460 命中 3-5 条)。
+    final lengths = [
+      episodeLengthSec,
+      episodeLengthSec + 40,
+      episodeLengthSec - 40,
+      episodeLengthSec + 80,
+      episodeLengthSec - 80,
+    ].where((l) => l > 0).toList();
+    for (final len in lengths) {
+      try {
+        final resp = await _dio.get(
+          mirror == null
+              ? 'https://api.aniskip.com/v2/skip-times/$malId/$episodeNumber'
+              : '${mirror.$1}/skip/aniskip/v2/skip-times/$malId/$episodeNumber',
+          queryParameters: {
+            'types': ['op', 'ed'],
+            'episodeLength': len,
+          },
+          options: mirror == null
+              ? null
+              : Options(headers: {'X-Skip-Token': mirror.$2}),
+        );
+        final data = resp.data;
+        final found = data is Map && data['found'] == true;
+        final results =
+            (data is Map ? data['results'] as List? : null) ?? const [];
+        final intervals = <SkipInterval>[];
+        if (found) {
+          for (final r in results) {
+            final interval = r is Map ? r['interval'] : null;
+            if (interval is! Map) continue;
+            final start = (interval['startTime'] as num?)?.toDouble();
+            final end = (interval['endTime'] as num?)?.toDouble();
+            final type = (r['skipType'] ?? '').toString();
+            if (start == null || end == null || end <= start) continue;
+            if (type != 'op' && type != 'ed') continue;
+            final skipId = (r['skipId'] ?? '').toString();
+            // [my新增] aniskip 默认填充模板: op=0-90s / ed=片尾-90s 罐头值
+            final isTemplate = (type == 'op' && start == 0 &&
+                    (end - start - 90).abs() < 1) ||
+                (type == 'ed' && (end - start - 90).abs() < 1);
+            intervals.add(SkipInterval(
+                type: type, start: start, end: end,
+                skipId: skipId, isTemplate: isTemplate));
+          }
         }
+        if (intervals.isEmpty) continue; // 该档片长无数据 → 试下一档
+        final filtered = applyGuards(intervals,
+            episodeLengthSec: episodeLengthSec,
+            blacklist: loadBlacklist().keys.toSet());
+        if (filtered.isEmpty) continue; // 有区间但全被守门/黑名单拦下 → 下一档
+        _intervalCache[key] = filtered;
+        KazumiLogger().i(
+            'SkipTime: intervals malId=$malId ep=$episodeNumber → ${filtered.length}'
+            ' (len=$len${intervals.length != filtered.length ? ', 守门过滤 ${intervals.length - filtered.length}' : ''})');
+        return filtered;
+      } on DioException catch (e) {
+        // 404 = 该档片长无匹配 → 阶梯下一档; 其余失败不缓存 (下次 tick 重试)
+        if (e.response?.statusCode != 404) {
+          KazumiLogger().i('SkipTime: aniskip query failed: $e');
+          rethrow;
+        }
+      } catch (e) {
+        KazumiLogger().i('SkipTime: aniskip query failed: $e');
+        rethrow;
       }
-      final filtered = applyGuards(intervals,
-          episodeLengthSec: episodeLengthSec,
-          blacklist: loadBlacklist().keys.toSet());
-      _intervalCache[key] = filtered;
-      KazumiLogger().i(
-          'SkipTime: intervals malId=$malId ep=$episodeNumber → ${filtered.length}'
-          '${intervals.length != filtered.length ? ' (守门过滤 ${intervals.length - filtered.length})' : ''}');
-      return filtered;
-    } on DioException catch (e) {
-      // 404 = 该集无社区数据 (负缓存); 其余失败不缓存 (下次 tick 重试)
-      if (e.response?.statusCode == 404) {
-        _intervalCache[key] = const [];
-        KazumiLogger()
-            .i('SkipTime: intervals malId=$malId ep=$episodeNumber → 无数据');
-        return const [];
-      }
-      rethrow;
-    } catch (e) {
-      KazumiLogger().i('SkipTime: aniskip query failed: $e');
-      rethrow;
     }
+    // 全阶梯无数据 (负缓存)
+    _intervalCache[key] = const [];
+    KazumiLogger().i(
+        'SkipTime: intervals malId=$malId ep=$episodeNumber → 无数据 (阶梯重试后)');
+    return const [];
   }
 
   /// 归一化 (全角转半角, 小写, 去空白/装饰符) 后 bigram Dice 相似度。

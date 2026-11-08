@@ -22,14 +22,112 @@ class BgmWebSubject {
 class BgmWebService {
   BgmWebService._();
 
-  static String get _cookie =>
-      GStorage.getSetting(SettingsKeys.bgmWebCookie).trim();
 
   static bool get isConfigured => _cookie.isNotEmpty;
 
-  /// 网页搜索: 返回候选条目 (id + 展示名)。空列表 = 无结果或 cookie 失效。
-  static Future<List<BgmWebSubject>> search(String keyword) async {
+  // —— [my新增] 自动登录 (bgm 表单 POST, 验证码默认不触发) ——
+
+  /// 会话探针: 当前 cookie 是否有效 (搜一个常用词看有无结果块)。
+  static Future<bool> cookieValid() async {
+    if (_cookie.isEmpty) return false;
+    try {
+      final subjects = await search('bangumi');
+      return subjects.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 表单登录: GET /login 取 formhash → POST /FollowTheRabbit → 捕获 cookie。
+  /// 返回新 cookie 串; 失败抛异常 (验证码触发时异常信息注明)。
+  static Future<String> webLogin(String email, String password) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 12)
+      ..findProxy = (uri) =>
+          Platform.environment['KAZUMI_NO_CLASH'] == '1'
+              ? 'DIRECT'
+              : 'PROXY 127.0.0.1:7897';
+    client.userAgent =
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+    try {
+      // 1) GET /login 取 formhash
+      final loginPage = await client.getUrl(Uri.parse('https://bgm.tv/login'));
+      loginPage.headers.set('Accept', 'text/html');
+      final lrs = await loginPage.close().timeout(const Duration(seconds: 20));
+      final loginHtml =
+          await lrs.transform(const Utf8Decoder(allowMalformed: true)).join();
+      final formhash = RegExp(r'name="formhash"[^>]*value="([^"]*)"')
+              .firstMatch(loginHtml)
+              ?.group(1) ??
+          '';
+      // 2) POST /FollowTheRabbit (重定向关闭, 手动捕 Set-Cookie)
+      final post = await client.postUrl(Uri.parse('https://bgm.tv/FollowTheRabbit'));
+      post.followRedirects = false;
+      post.headers.set('Content-Type', 'application/x-www-form-urlencoded');
+      final fields = {
+        'formhash': formhash,
+        'referer': '',
+        'dreferer': '',
+        'email': email,
+        'password': password,
+        'cookietime': '2592000',
+        'loginsubmit': '登录',
+      };
+      post.add(utf8.encode(fields.entries
+          .map((e) =>
+              '${e.key}=${Uri.encodeQueryComponent(e.value)}')
+          .join('&')));
+      final prs = await post.close().timeout(const Duration(seconds: 25));
+      final cookies = <String>[];
+      for (final set in prs.headers['set-cookie'] ?? const <String>[]) {
+        cookies.add(set.split(';').first);
+      }
+      final cookieStr = cookies.join('; ');
+      if (cookieStr.isEmpty || prs.statusCode >= 400) {
+        final errBody = await prs.transform(const Utf8Decoder(allowMalformed: true)).join();
+        final needCaptcha = errBody.contains('captcha') &&
+            !errBody.contains('display:none');
+        throw Exception(
+            '登录失败 (HTTP ${prs.statusCode}${needCaptcha ? ', 需要验证码' : ''})');
+      }
+      return cookieStr;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// [核心] 使用前自动检查: cookie 空/失效 → 用存储的账号自动重登。
+  /// 账号未配置时抛异常 (调用方引导填写)。返回可用 cookie。
+  static Future<String> ensureCookie() async {
     final cookie = _cookie;
+    if (cookie.isNotEmpty) {
+      try {
+        final ok = (await _fetchSearch('bangumi')).isNotEmpty;
+        if (ok) return cookie;
+      } catch (_) {}
+    }
+    final email = GStorage.getSetting(SettingsKeys.bgmAccountEmail).trim();
+    final password =
+        GStorage.getSetting(SettingsKeys.bgmAccountPassword).trim();
+    if (email.isEmpty || password.isEmpty) {
+      throw Exception('bgm 网页 cookie 缺失且未配置自动登录账号');
+    }
+    final fresh = await webLogin(email, password);
+    GStorage.putSetting(SettingsKeys.bgmWebCookie, fresh);
+    _cookieOverride = fresh;
+    return fresh;
+  }
+
+  static String? _cookieOverride;
+
+  static String get _cookie =>
+      _cookieOverride ??
+      GStorage.getSetting(SettingsKeys.bgmWebCookie).trim();
+
+  /// 网页搜索: 返回候选条目 (id + 展示名)。空列表 = 无结果或 cookie 失效。
+  static Future<List<BgmWebSubject>> search(String keyword,
+      {String? cookieOverride}) async {
+    final cookie = cookieOverride ?? _cookie;
     if (cookie.isEmpty) {
       throw Exception('bgm 网页 cookie 未配置 (设置→里番收藏→bgm 关联设置)');
     }

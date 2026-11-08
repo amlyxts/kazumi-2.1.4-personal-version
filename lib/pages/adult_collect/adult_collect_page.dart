@@ -258,17 +258,21 @@ class _AdultCollectPageState extends State<AdultCollectPage>
 
   // —— [my新增] bgm 关联 (cookie 网页搜索自动匹配 + 手动 ID + 管理) ——
 
-  final TextEditingController _bgmCookieController = TextEditingController();
+  final TextEditingController _bgmEmailController = TextEditingController();
+  final TextEditingController _bgmPasswordController = TextEditingController();
   String _bgmMatchProgress = '';
 
   Future<void> _showBgmAssociate() async {
-    _bgmCookieController.text =
-        GStorage.getSetting(SettingsKeys.bgmWebCookie).trim();
+    _bgmEmailController.text =
+        GStorage.getSetting(SettingsKeys.bgmAccountEmail).trim();
+    _bgmPasswordController.text =
+        GStorage.getSetting(SettingsKeys.bgmAccountPassword).trim();
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           final map = BgmWebService.loadMap();
-          final cookie = _bgmCookieController.text.trim();
+          final hasAccount = _bgmEmailController.text.trim().isNotEmpty &&
+              _bgmPasswordController.text.trim().isNotEmpty;
           final unmapped = _collectController.collectibles
               .where((c) =>
                   c.section == 1 &&
@@ -282,29 +286,35 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('bgm.tv 网页 cookie (登录态):',
+                  const Text('bgm.tv 账号 (自动登录, 密码仅存本地):',
                       style: TextStyle(fontSize: 12)),
                   TextField(
-                    controller: _bgmCookieController,
-                    maxLines: 2,
-                    style: const TextStyle(fontSize: 11),
-                    decoration: const InputDecoration(
-                        hintText:
-                            '浏览器登录 bgm.tv → F12 → Network → 任意请求 → 复制 Cookie 头整串'),
+                    controller: _bgmEmailController,
+                    style: const TextStyle(fontSize: 12),
+                    decoration: const InputDecoration(hintText: '邮箱'),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _bgmPasswordController,
+                    obscureText: true,
+                    style: const TextStyle(fontSize: 12),
+                    decoration: const InputDecoration(hintText: '密码'),
                   ),
                   const SizedBox(height: 8),
                   Row(children: [
                     ElevatedButton(
                       onPressed: () {
-                        GStorage.putSetting(SettingsKeys.bgmWebCookie,
-                            _bgmCookieController.text.trim());
-                        KazumiDialog.showToast(message: 'cookie 已保存');
+                        GStorage.putSetting(SettingsKeys.bgmAccountEmail,
+                            _bgmEmailController.text.trim());
+                        GStorage.putSetting(SettingsKeys.bgmAccountPassword,
+                            _bgmPasswordController.text.trim());
+                        KazumiDialog.showToast(message: '账号已保存 (失效时自动重登)');
                       },
-                      child: const Text('保存 cookie'),
+                      child: const Text('保存账号'),
                     ),
                     const SizedBox(width: 10),
                     ElevatedButton(
-                      onPressed: cookie.isEmpty
+                      onPressed: !hasAccount
                           ? null
                           : () async {
                               setDialogState(

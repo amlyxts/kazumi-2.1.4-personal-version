@@ -709,9 +709,20 @@ class SettingsKeys {
     '',
     group: SettingGroup.collect,
   );
-  // [my新增] bgm.tv 网页 cookie (里番 bgm 关联自动化用, 用户从浏览器提取)
+  // [my新增] bgm.tv 网页 cookie (自动登录捕获; 也可从浏览器手动提取)
   static const bgmWebCookie = SettingKey<String>(
     'bgmWebCookie',
+    '',
+    group: SettingGroup.collect,
+  );
+  // [my新增] bgm 账号 (cookie 过期自动重登用; 明文本地存储, 与 WebDAV 同级)
+  static const bgmAccountEmail = SettingKey<String>(
+    'bgmAccountEmail',
+    '',
+    group: SettingGroup.collect,
+  );
+  static const bgmAccountPassword = SettingKey<String>(
+    'bgmAccountPassword',
     '',
     group: SettingGroup.collect,
   );

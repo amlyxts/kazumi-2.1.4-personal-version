@@ -1,5 +1,6 @@
 import 'package:kazumi/modules/history/history_module.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/utils/constants.dart';
 
 enum HistorySourceFilter {
   all('全部'),
@@ -18,19 +19,20 @@ enum HistorySourceFilter {
   static bool isDirect(History history) =>
       history.episodePageUrl.contains('watch?v=');
 
+  // [my修复] iOS 强制恒隐藏直连条目 (纯表番端设计): 同步来的里番历史
+  // 此前在 iOS 裸奔 (设置无开关且默认关), 现平台强制 + 设置双门控。
+  static bool get _hideDirect =>
+      !kSupportsR18Tabs || kHideDirectHistory;
+
   bool _matches(History history) => switch (this) {
-        all =>
-          // iOS: 直连档隐藏 = 全部视图也不显示直连条目 (隐私默认)
-          kHideDirectHistory ? !isDirect(history) : true,
+        all => _hideDirect ? !isDirect(history) : true,
         online => HistoryEntryKind.normalize(history.entryKind) ==
                 HistoryEntryKind.online &&
-            !(kHideDirectHistory && isDirect(history)),
+            !(_hideDirect && isDirect(history)),
         offline => HistoryEntryKind.normalize(history.entryKind) ==
                 HistoryEntryKind.offline &&
-            // [my修复] iOS 缓存档同样滤直连条目 — 此前只滤了全部/在线,
-            // 缓存视图仍暴露 (用户实测发现)
-            !(kHideDirectHistory && isDirect(history)),
-        direct => isDirect(history),
+            !(_hideDirect && isDirect(history)),
+        direct => isDirect(history) && !_hideDirect,
       };
 }
 

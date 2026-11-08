@@ -667,8 +667,11 @@ class _PlayerItemState extends State<PlayerItem>
             break;
           }
         }
-      } else {
-        // 手动秒数回退 (无社区数据时)
+      }
+      // [my修复] 手动秒数回退改为通用兜底: 无社区数据【或区间被时长守卫
+      // 全部丢弃】(片源版本≠社区录制版本, 如悪魔狩り案例) 都接管 —
+      // 此前回退挂在 else 上, 社区区间存在但不适用时手动秒数永不生效。
+      if (target == null) {
         final opSec =
             GStorage.getSetting(SettingsKeys.autoSkipOpManualSeconds);
         if (opSec > 0 && posMs < opSec * 1000) {
@@ -693,7 +696,8 @@ class _PlayerItemState extends State<PlayerItem>
               '区间=${intervals?.length ?? 0} '
               '手动OP=${GStorage.getSetting(SettingsKeys.autoSkipOpManualSeconds)} '
               '手动ED=${GStorage.getSetting(SettingsKeys.autoSkipEdManualSeconds)}');
-        }        return;
+        }
+        return;
       }
       await playerController.seek(target);
       // [my新增] 操作条 (方案B): 撤销跳过 → (变形) 拉黑此标记

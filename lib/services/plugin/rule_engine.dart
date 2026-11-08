@@ -91,6 +91,46 @@ class RuleEngine {
         items = matched;
       }
       if (items.isEmpty) {
+        // [my新增] SPA 渲染重试: 带标志规则解析无结果 → 直连拿的多半是 JS 壳,
+        // 强制走 WebView 渲染再解析一次 (仍无结果才认输)。
+        if (config.webviewFetch) {
+          final executor = _requestExecutor;
+          if (executor is ChallengeAwareRuleRequestExecutor) {
+            try {
+              KazumiLogger().i(
+                  'SPA 渲染重试: ${config.pluginName} 直连解析无结果 → WebView 渲染');
+              final raw2 = await executor.forceWebviewFetch(request.url);
+              final parsed2 = config.searchMode == RuleMode.api
+                  ? _apiStrategy.parseSearch(raw2, config.searchApiConfig)
+                  : _xpathStrategy.parseSearch(raw2, config);
+              var items2 = parsed2.items;
+              final kw2 = keyword.trim();
+              if (config.strictSearchMatch &&
+                  kw2.isNotEmpty &&
+                  items2.length > 1) {
+                items2 = items2
+                    .where((e) => e.name.contains(kw2))
+                    .toList();
+              }
+              if (items2.isNotEmpty) {
+                KazumiLogger().i(
+                    'SPA 渲染重试: ${config.pluginName} → ${items2.length} 条');
+                _logDiagnostics(config, 'search(spa)', parsed2.diagnostics);
+                return RuleSearchTrace(
+                  rawResponse: raw2,
+                  response: PluginSearchResponse(
+                      pluginName: config.pluginName, data: items2),
+                  matchedFragments: parsed2.matchedFragments,
+                  diagnostics: parsed2.diagnostics,
+                );
+              }
+            } catch (retryError) {
+              if (_isCancellation(retryError)) rethrow;
+              KazumiLogger().w(
+                  'SPA 渲染重试失败: ${config.pluginName} $retryError');
+            }
+          }
+        }
         throw NoResultException(config.pluginName);
       }
       _logDiagnostics(config, 'search', parsed.diagnostics);
@@ -388,6 +428,23 @@ class ChallengeAwareRuleRequestExecutor implements RuleRequestExecutor {
       throw Exception('FlareSolverr 返回空页面');
     }
     return html;
+  }
+
+  /// [my新增] 强制走 WebView→FS 链取页 (SPA 渲染场景: 直连拿到 JS 壳,
+  /// 解析无结果时由引擎二次调用)。不走守门/记忆, 直接兜底链。
+  Future<String> forceWebviewFetch(String url) async {
+    try {
+      return await _webviewFetcher(url);
+    } catch (webviewError) {
+      KazumiLogger().w(
+          '挑战回退: 强制 WebView 失败 → FlareSolverr 兜底 ($webviewError)');
+      try {
+        return await _flareSolverrSolver(url);
+      } catch (fsError) {
+        throw ChallengeFetchException(
+            'WebView 与 FlareSolverr 取页均失败 (webview: $webviewError | fs: $fsError)');
+      }
+    }
   }
 
   @override

@@ -38,7 +38,7 @@ class WebviewPageFetchService {
   /// 取回页面 HTML; 挑战页会轮询等待自解, 超时抛 [TimeoutException]。
   Future<String> fetchHtml(
     String url, {
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 20),
   }) {
     final task = _tail!.then((_) => _fetchHtml(url, timeout));
     _tail = task.then<void>((_) {}, onError: (_) {});
@@ -80,12 +80,19 @@ class WebviewPageFetchService {
   Future<String> _fetchWindows(String url, DateTime deadline) async {
     final wv = _windowsWebview ??= await _initWindows();
     await wv.loadUrl(url);
+    // [my新增] SPA 稳定窗口: 数据在 readyState 之后异步到达, 连续两轮
+    // 长度不变才返回 (每轮 1.5s, 即至少多等 1.5s 换完整性)
+    var lastLen = -1;
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 1500));
       final html = await _windowsHtml(wv);
-      if (html.isNotEmpty && !FlareSolverrService.isChallengeBody(html)) {
-        return html;
+      if (html.isEmpty) continue;
+      if (FlareSolverrService.isChallengeBody(html)) {
+        lastLen = -1;
+        continue;
       }
+      if (html.length == lastLen) return html;
+      lastLen = html.length;
     }
     throw TimeoutException('WebviewFetch: 挑战未在时限内自解 (Windows)');
   }
@@ -136,12 +143,17 @@ class WebviewPageFetchService {
       throw StateError('WebviewFetch: headless controller 缺失');
     }
     await c.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    var lastLen = -1;
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 1500));
       final html = await _mobileHtml(c);
-      if (html.isNotEmpty && !FlareSolverrService.isChallengeBody(html)) {
-        return html;
+      if (html.isEmpty) continue;
+      if (FlareSolverrService.isChallengeBody(html)) {
+        lastLen = -1;
+        continue;
       }
+      if (html.length == lastLen) return html;
+      lastLen = html.length;
     }
     throw TimeoutException('WebviewFetch: 挑战未在时限内自解 (移动端)');
   }

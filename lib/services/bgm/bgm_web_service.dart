@@ -10,7 +10,9 @@
 // 挑战/未登录: 返回页无结果块 → 空列表 (调用方提示 cookie 失效)。
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:kazumi/services/plugin/captcha_ocr_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 class BgmWebSubject {
@@ -38,9 +40,22 @@ class BgmWebService {
     }
   }
 
-  /// 表单登录: GET /login 取 formhash → POST /FollowTheRabbit → 捕获 cookie。
-  /// 返回新 cookie 串; 失败抛异常 (验证码触发时异常信息注明)。
+  /// 表单登录: GET /login (formhash + cookie jar) → POST /FollowTheRabbit。
+  /// 验证码触发时 (响应含可见 captcha 块): 抓验证码图 → OCR 识别 → 重试
+  /// (最多 3 轮, 每轮新验证码)。成功 = 302 且 Set-Cookie 含登录态。
+  /// 返回完整 cookie 串; 失败抛异常 (信息含原因)。
   static Future<String> webLogin(String email, String password) async {
+    final jar = <String, String>{};
+    String cookieHeader() =>
+        jar.entries.map((e) => '${e.key}=${e.value}').join('; ');
+    void eatCookies(HttpClientResponse rs) {
+      for (final set in rs.headers['set-cookie'] ?? const <String>[]) {
+        final pair = set.split(';').first;
+        final i = pair.indexOf('=');
+        if (i > 0) jar[pair.substring(0, i)] = pair.substring(i + 1);
+      }
+    }
+
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 12)
       ..findProxy = (uri) =>
@@ -50,47 +65,76 @@ class BgmWebService {
     client.userAgent =
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
     try {
-      // 1) GET /login 取 formhash
-      final loginPage = await client.getUrl(Uri.parse('https://bgm.tv/login'));
-      loginPage.headers.set('Accept', 'text/html');
-      final lrs = await loginPage.close().timeout(const Duration(seconds: 20));
-      final loginHtml =
-          await lrs.transform(const Utf8Decoder(allowMalformed: true)).join();
-      final formhash = RegExp(r'name="formhash"[^>]*value="([^"]*)"')
-              .firstMatch(loginHtml)
-              ?.group(1) ??
-          '';
-      // 2) POST /FollowTheRabbit (重定向关闭, 手动捕 Set-Cookie)
-      final post = await client.postUrl(Uri.parse('https://bgm.tv/FollowTheRabbit'));
-      post.followRedirects = false;
-      post.headers.set('Content-Type', 'application/x-www-form-urlencoded');
-      final fields = {
-        'formhash': formhash,
-        'referer': '',
-        'dreferer': '',
-        'email': email,
-        'password': password,
-        'cookietime': '2592000',
-        'loginsubmit': '登录',
-      };
-      post.add(utf8.encode(fields.entries
-          .map((e) =>
-              '${e.key}=${Uri.encodeQueryComponent(e.value)}')
-          .join('&')));
-      final prs = await post.close().timeout(const Duration(seconds: 25));
-      final cookies = <String>[];
-      for (final set in prs.headers['set-cookie'] ?? const <String>[]) {
-        cookies.add(set.split(';').first);
+      for (var attempt = 1; attempt <= 3; attempt++) {
+        // 1) GET /login: formhash + 会话 cookie + 验证码状态
+        final lreq = await client.getUrl(Uri.parse('https://bgm.tv/login'));
+        lreq.headers.set('Cookie', cookieHeader());
+        lreq.headers.set('Accept', 'text/html');
+        final lrs = await lreq.close().timeout(const Duration(seconds: 20));
+        eatCookies(lrs);
+        final loginHtml = await lrs
+            .transform(const Utf8Decoder(allowMalformed: true))
+            .join();
+        final formhash = RegExp(r'name="formhash"[^>]*value="([^"]*)"')
+                .firstMatch(loginHtml)
+                ?.group(1) ??
+            '';
+        // 验证码图片 (仅触发时可见): captcha_img 块内的 img
+        final capImg = RegExp(r'id="captcha_img".{0,300}?src="([^"]+)"',
+                dotAll: true)
+            .firstMatch(loginHtml)
+            ?.group(1);
+        String? captchaAnswer;
+        if (capImg != null && capImg.isNotEmpty) {
+          final imgUrl = capImg.startsWith('http')
+              ? capImg
+              : 'https://bgm.tv$capImg';
+          final ireq = await client.getUrl(Uri.parse(imgUrl));
+          ireq.headers.set('Cookie', cookieHeader());
+          final irs = await ireq.close().timeout(const Duration(seconds: 15));
+          final bytes = <int>[];
+          await for (final chunk in irs) {
+            bytes.addAll(chunk);
+          }
+          captchaAnswer = await CaptchaOcrService.solve(Uint8List.fromList(bytes));
+          if (captchaAnswer == null || captchaAnswer.trim().isEmpty) {
+            throw Exception('bgm 登录验证码识别失败 (检查 OCR 渠道配置)');
+          }
+          print('[bgm登录] 验证码 OCR → ${captchaAnswer.trim()}');
+          captchaAnswer = captchaAnswer.trim();
+        }
+        // 2) POST /FollowTheRabbit
+        final post =
+            await client.postUrl(Uri.parse('https://bgm.tv/FollowTheRabbit'));
+        post.followRedirects = false;
+        post.headers.set('Content-Type', 'application/x-www-form-urlencoded');
+        post.headers.set('Cookie', cookieHeader());
+        final fields = <String, String>{
+          'formhash': formhash,
+          'referer': '',
+          'dreferer': '',
+          'email': email,
+          'password': password,
+          'cookietime': '2592000',
+          'loginsubmit': '登录',
+        };
+        if (captchaAnswer != null) {
+          fields['captcha_challenge_field'] = captchaAnswer;
+        }
+        post.add(utf8.encode(fields.entries
+            .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
+            .join('&')));
+        final prs = await post.close().timeout(const Duration(seconds: 25));
+        eatCookies(prs);
+        // 成功 = 302 (且 Set-Cookie 发了记忆登录态)
+        if (prs.statusCode == 302 &&
+            (jar['chii_sec_id'] ?? '').isNotEmpty &&
+            !(jar['chii_sec_id'] ?? '').startsWith('deleted')) {
+          return cookieHeader();
+        }
+        print('[bgm登录] 第 $attempt 次未成功 (HTTP ${prs.statusCode})');
       }
-      final cookieStr = cookies.join('; ');
-      if (cookieStr.isEmpty || prs.statusCode >= 400) {
-        final errBody = await prs.transform(const Utf8Decoder(allowMalformed: true)).join();
-        final needCaptcha = errBody.contains('captcha') &&
-            !errBody.contains('display:none');
-        throw Exception(
-            '登录失败 (HTTP ${prs.statusCode}${needCaptcha ? ', 需要验证码' : ''})');
-      }
-      return cookieStr;
+      throw Exception('登录失败: 3 次尝试后仍被要求验证码或凭据被拒');
     } finally {
       client.close();
     }

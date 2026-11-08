@@ -102,7 +102,7 @@ class BgmWebService {
     final cookie = _cookie;
     if (cookie.isNotEmpty) {
       try {
-        final ok = (await _fetchSearch('bangumi')).isNotEmpty;
+        final ok = (await search('bangumi')).isNotEmpty;
         if (ok) return cookie;
       } catch (_) {}
     }

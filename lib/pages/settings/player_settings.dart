@@ -12,6 +12,7 @@ import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/bean/settings/settings_list.dart';
 import 'package:kazumi/utils/device.dart';
+import 'package:kazumi/services/skip/skip_time_service.dart';
 
 class PlayerSettingsPage extends StatefulWidget {
   const PlayerSettingsPage({super.key});
@@ -34,6 +35,9 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
   late bool playResume;
   late bool showPlayerError;
   late bool privateMode;
+
+  /// [my新增] 隐藏直连历史 (默认关)
+  late bool hideDirectHistory;
   late bool playerDebugMode;
   late bool playerDisableAnimations;
   late bool forceAdBlocker;
@@ -42,6 +46,10 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
   late bool brightnessVolumeGesture;
   late int playerButtonSkipTime;
   late int playerArrowKeySkipTime;
+  // [my新增] 自动跳过片头片尾
+  late bool autoSkipOpEd;
+  late int autoSkipOpManualSeconds;
+  late int autoSkipEdManualSeconds;
   late int playerLogLevel;
   late int playerControllerLayerDisappearTime;
 
@@ -66,6 +74,8 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
         GStorage.getSetting<bool>(SettingsKeys.androidAutoEnterPIP);
     playResume = GStorage.getSetting<bool>(SettingsKeys.playResume);
     privateMode = GStorage.getSetting<bool>(SettingsKeys.privateMode);
+    hideDirectHistory =
+        GStorage.getSetting<bool>(SettingsKeys.hideDirectHistory);
     showPlayerError = GStorage.getSetting<bool>(SettingsKeys.showPlayerError);
     playerDebugMode = GStorage.getSetting<bool>(SettingsKeys.playerDebugMode);
     autoPlayNext = GStorage.getSetting<bool>(SettingsKeys.autoPlayNext);
@@ -83,6 +93,13 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
         GStorage.getSetting<int>(SettingsKeys.buttonSkipTime);
     playerArrowKeySkipTime =
         GStorage.getSetting<int>(SettingsKeys.arrowKeySkipTime);
+
+    // [my新增] 自动跳过片头片尾
+    autoSkipOpEd = GStorage.getSetting<bool>(SettingsKeys.autoSkipOpEd);
+    autoSkipOpManualSeconds =
+        GStorage.getSetting<int>(SettingsKeys.autoSkipOpManualSeconds);
+    autoSkipEdManualSeconds =
+        GStorage.getSetting<int>(SettingsKeys.autoSkipEdManualSeconds);
 
     playerControllerLayerDisappearTime = GStorage.getSetting<int>(
         SettingsKeys.playerControllerLayerDisappearTime);
@@ -149,8 +166,135 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
     });
   }
 
-  Future<void> updateButtonSkipTime() async {
-    final int? newButtonSkipTime = await _showSkipTimeChangeDialog(
+  // [my新增] 错标黑名单管理: 查看/解除
+  Future<void> _showSkipBlacklist() async {
+    await KazumiDialog.show(
+      builder: (context) {
+        var entries =
+            SkipTimeService.loadBlacklist().entries.toList();
+        return AlertDialog(
+          title: Text('错标黑名单 (${entries.length})'),
+          content: entries.isEmpty
+              ? const Text('空 — 播放时在跳过操作条上点两次可将错标拉黑')
+              : SizedBox(
+                  width: 400,
+                  height: 300,
+                  child: StatefulBuilder(
+                      builder: (context, setDialogState) {
+                    return ListView.builder(
+                      itemCount: entries.length,
+                      itemBuilder: (context, index) {
+                        final skipId = entries[index].key;
+                        final m = entries[index].value;
+                        final type =
+                            (m['type'] ?? '').toString() == 'ed' ? 'ED' : 'OP';
+                        return ListTile(
+                          dense: true,
+                          title: Text(
+                              '${m['seriesName'] ?? '未知'} 第${m['episode']}集 '
+                              '$type ${(m['start'] as num?)?.toInt() ?? 0}'
+                              '-${(m['end'] as num?)?.toInt() ?? 0}s',
+                              style: const TextStyle(fontSize: 13)),
+                          trailing: TextButton(
+                            child: const Text('解除'),
+                            onPressed: () {
+                              SkipTimeService.removeBlacklist(skipId);
+                              setDialogState(() {
+                                entries.removeWhere(
+                                    (e) => e.key == skipId);
+                              });
+                            },
+                          ),
+                        );
+                      },
+                    );
+                  }),
+                ),
+          actions: [
+            TextButton(
+              onPressed: () => KazumiDialog.dismiss(),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// [my新增] 跳过镜像编辑: 地址+token 同框填写; 「清除」一键置空两键
+  /// 恢复直连/走代理 (存储保持两键, 服务侧零改动)
+  Future<void> _editSkipMirror() async {
+    final baseController = TextEditingController(
+        text: GStorage.getSetting(SettingsKeys.skipMirrorBase));
+    final tokenController = TextEditingController(
+        text: GStorage.getSetting(SettingsKeys.skipMirrorToken));
+    Future<void> save(String base, String token) async {
+      await GStorage.putSetting(SettingsKeys.skipMirrorBase, base);
+      await GStorage.putSetting(SettingsKeys.skipMirrorToken, token);
+      KazumiDialog.dismiss();
+      if (mounted) setState(() {});
+    }
+
+    await KazumiDialog.show(
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('跳过数据源镜像', style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: baseController,
+              decoration: const InputDecoration(
+                  labelText: '镜像地址', hintText: 'http://host:31033'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: tokenController,
+              decoration: const InputDecoration(
+                  labelText: '访问 Token', hintText: '与服务端一致'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => save('', ''),
+            child: const Text('清除'),
+          ),
+          TextButton(
+            onPressed: KazumiDialog.dismiss,
+            child: Text('取消',
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.outline)),
+          ),
+          TextButton(
+            onPressed: () => save(baseController.text.trim(),
+                tokenController.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// [my新增] 片头/片尾手动跳过秒数 (复用快进时长数字输入对话框)
+  Future<void> _updateSkipSeconds({required bool isOp}) async {
+    final current = isOp ? autoSkipOpManualSeconds : autoSkipEdManualSeconds;
+    final newValue = await _showSkipTimeChangeDialog(
+      title: isOp ? '片头手动跳过秒数' : '片尾手动跳过秒数',
+      initialValue: current.toString(),
+    );
+    if (newValue == null) return;
+    if (isOp) {
+      await GStorage.putSetting<int>(
+          SettingsKeys.autoSkipOpManualSeconds, newValue);
+      setState(() => autoSkipOpManualSeconds = newValue);
+    } else {
+      await GStorage.putSetting<int>(
+          SettingsKeys.autoSkipEdManualSeconds, newValue);
+      setState(() => autoSkipEdManualSeconds = newValue);
+    }
+  }
+
+  Future<void> updateButtonSkipTime() async {    final int? newButtonSkipTime = await _showSkipTimeChangeDialog(
         title: '顶部按钮快进时长', initialValue: playerButtonSkipTime.toString());
 
     if (newButtonSkipTime != null &&
@@ -342,6 +486,57 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                 description: Text('当前视频播放完毕后自动播放下一集'),
                 initialValue: autoPlayNext,
               ),
+              // [my新增] 自动跳过片头片尾: 社区数据 (aniskip) 优先, 无数据
+              // 回退手动秒数 (0 = 不跳)
+              SettingsTile.switchTile(
+                leading: Icons.skip_next_rounded,
+                onToggle: (value) async {
+                  autoSkipOpEd = value ?? !autoSkipOpEd;
+                  await GStorage.putSetting<bool>(
+                      SettingsKeys.autoSkipOpEd, autoSkipOpEd);
+                  setState(() {});
+                },
+                title: Text('自动跳过片头片尾'),
+                description:
+                    Text('播放到社区数据的片头/片尾区间时自动跳过 (Syncplay 会话中不生效)'),
+                initialValue: autoSkipOpEd,
+              ),
+              SettingsTile(
+                leading: Icons.slow_motion_video_rounded,
+                onPressed: (_) => _updateSkipSeconds(isOp: true),
+                title: Text('片头手动跳过秒数'),
+                description: Text('无社区数据时自动跳过开头 N 秒 (当前: '
+                    '$autoSkipOpManualSeconds 秒, 0 为不跳)'),
+              ),
+              SettingsTile(
+                leading: Icons.fast_forward_rounded,
+                onPressed: (_) => _updateSkipSeconds(isOp: false),
+                title: Text('片尾手动跳过秒数'),
+                description: Text('无社区数据时跳过结尾 N 秒 (当前: '
+                    '$autoSkipEdManualSeconds 秒, 0 为不跳)'),
+              ),
+              // [my新增] 错标黑名单管理
+              SettingsTile(
+                leading: Icons.block_rounded,
+                onPressed: (_) => _showSkipBlacklist(),
+                title: Text('错标黑名单 (${SkipTimeService.loadBlacklist().length})'),
+                description: const Text(
+                    '播放时在跳过操作条上拉黑的错误区间 (点击解除恢复自动跳过)'),
+              ),
+              // [my新增] 自建镜像 (iOS 无代理环境): 地址+token 同框填写,
+              // 三端通用; 清除/留空维持直连/走代理
+              SettingsTile(
+                leading: Icons.dns_rounded,
+                onPressed: (_) => _editSkipMirror(),
+                title: Text('跳过数据源镜像'),
+                description: Text(() {
+                  final base =
+                      GStorage.getSetting(SettingsKeys.skipMirrorBase);
+                  return base.isEmpty
+                      ? '留空=直连/走代理 (iOS 无代理环境可填自建镜像)'
+                      : '已配置: $base';
+                }()),
+              ),
               if (Platform.isAndroid)
                 SettingsTile.switchTile(
                   leading: Icons.picture_in_picture_alt_rounded,
@@ -408,6 +603,23 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
                 description: Text('不保留观看记录'),
                 initialValue: privateMode,
               ),
+              // [my新增] 隐藏直连历史: 三档过滤 + 直连档隐藏 (双平台)
+              // [my调整] iOS 恒隐藏直连条目 (kSupportsR18Tabs=false 即无直连
+              // 来源), 开关无意义不显示
+              if (kSupportsR18Tabs)
+                SettingsTile.switchTile(
+                  leading: Icons.hide_image_outlined,
+                  onToggle: (value) async {
+                    hideDirectHistory = value ?? !hideDirectHistory;
+                    await GStorage.putSetting<bool>(
+                        SettingsKeys.hideDirectHistory, hideDirectHistory);
+                    setState(() {});
+                  },
+                  title: Text('隐藏直连历史'),
+                  description: Text(
+                      '历史页不显示源直连来源的观看记录 (含全部/在线/缓存视图)'),
+                  initialValue: hideDirectHistory,
+                ),
             ],
           ),
           SettingsSection(

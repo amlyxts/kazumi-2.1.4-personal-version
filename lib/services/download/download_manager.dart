@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
@@ -678,6 +679,42 @@ class DownloadManager implements IDownloadManager {
       episode.downloadedSegments = 0;
       _notifyProgress(task, episode);
 
+      // [my新增] 直链多连接并行: 文件切 N 段 Range 并行下载 (实测 4 连接
+      // ~2.1x)。sidecar (.pmeta) 记录各段进度, 暂停/失败后按段续传;
+      // 服务器不支持 Range / 文件过小 / 连接数 < 2 时返回 false 走原路径。
+      final connections =
+          GStorage.getSetting(SettingsKeys.downloadDirectConnections);
+      final metaPath = '$tmpPath.pmeta';
+      final parallelDone = await _runParallelDirectDownload(
+        task: task,
+        episode: episode,
+        videoUrl: videoUrl,
+        httpHeaders: httpHeaders,
+        tmpPath: tmpPath,
+        metaPath: metaPath,
+        connections: connections,
+      );
+      if (parallelDone == true) {
+        await File(tmpPath).rename(filePath);
+        episode.status = DownloadStatus.completed;
+        episode.localM3u8Path = filePath;
+        episode.downloadedSegments = 1;
+        episode.progressPercent = 1.0;
+        episode.completedAt = DateTime.now();
+        episode.totalBytes = await File(filePath).length();
+        _notifyProgress(task, episode);
+        KazumiLogger().i(
+          'DownloadManager: episode ${task.episodeNumber} completed (parallel direct download). '
+          '${(episode.totalBytes / 1024 / 1024).toStringAsFixed(1)} MB',
+        );
+        return;
+      }
+      if (parallelDone == null) {
+        // 暂停/取消: 状态已由并行路径设置
+        return;
+      }
+      // false: 不适用并行 (无 Range 支持/文件过小/遗留 tmp 续传), 走原单连接。
+
       final requestHeaders = Map<String, String>.from(httpHeaders);
       bool useRange = existingBytes > 0;
       if (useRange) {
@@ -794,6 +831,238 @@ class DownloadManager implements IDownloadManager {
       KazumiLogger()
           .e('DownloadManager: direct file download failed', error: e);
     }
+  }
+
+  // ====== [my新增] 直链多连接并行 ======
+  // 方案: 探测总大小 → 文件按 bounds 切 N 段, 每段独立分片文件
+  // (tmpPath.partN, 段文件长度即进度, 断点续传天然成立) → N 连接 Range
+  // 并行 (每段带重试, 应对直连间歇性重置) → 全部完成后顺序拼接回 tmp。
+  // sidecar (.pmeta) 只记 total+bounds, 用于恢复时校验分段布局。
+
+  /// 返回: true = 完成 (tmp 已拼接好); null = 暂停/取消 (状态已设置);
+  /// false = 不适用并行, 调用方走原单连接路径。异常 = 失败 (分片保留供重试)。
+  Future<bool?> _runParallelDirectDownload({
+    required DownloadTask task,
+    required DownloadEpisode episode,
+    required String videoUrl,
+    required Map<String, String> httpHeaders,
+    required String tmpPath,
+    required String metaPath,
+    required int connections,
+  }) async {
+    final key = _taskKey(task.recordKey, task.episodeNumber);
+    final metaFile = File(metaPath);
+
+    int totalSize = 0;
+    List<int> bounds = const [];
+    if (await metaFile.exists()) {
+      try {
+        final m = jsonDecode(await metaFile.readAsString());
+        totalSize = (m['total'] as num?)?.toInt() ?? 0;
+        bounds = ((m['bounds'] as List?) ?? const [])
+            .map((e) => (e as num).toInt())
+            .toList();
+        if (totalSize <= 0 || bounds.isEmpty) {
+          throw const FormatException('bad meta');
+        }
+      } catch (_) {
+        await metaFile.delete();
+        await _deletePartFiles(tmpPath, bounds.length);
+        totalSize = 0;
+        bounds = const [];
+      }
+    }
+    final tmpExists = await File(tmpPath).exists();
+    if (totalSize == 0) {
+      if (tmpExists) return false; // 遗留单连接 tmp, 走原路径续传
+      if (connections < 2) return false;
+
+      // 探测总大小: Range 0-0 (响应体仅 1 字节)。独立 CancelToken —
+      // 服务器无视 Range 返回 200 全量流时立即取消, 不吞整个文件。
+      final probeToken = CancelToken();
+      final probeHeaders = Map<String, String>.from(httpHeaders)
+        ..['Range'] = 'bytes=0-0';
+      final probe = await _http.getStream(
+        videoUrl,
+        headers: probeHeaders,
+        receiveTimeout: const Duration(seconds: 30),
+        cancelToken: probeToken,
+      );
+      final contentRange = probe.headers.value('content-range');
+      if (contentRange == null) {
+        probeToken.cancel();
+        return false; // 不支持 Range, 并行无从谈起
+      }
+      await probe.data?.stream.drain<void>();
+      final totalMatch = RegExp(r'/(\d+)').firstMatch(contentRange);
+      if (totalMatch == null) return false;
+      totalSize = int.parse(totalMatch.group(1)!);
+      // 文件太小不值得并行 (< 8MB); 段数按每段至少 4MB 收敛
+      if (totalSize < 8 * 1024 * 1024) return false;
+      final n = connections.clamp(1, (totalSize / (4 * 1024 * 1024)).ceil());
+      bounds = List.generate(n, (i) => (i + 1) * totalSize ~/ n);
+      bounds[n - 1] = totalSize;
+      await metaFile.writeAsString(jsonEncode(
+          {'total': totalSize, 'bounds': bounds}));
+      await _deletePartFiles(tmpPath, 64); // 清理可能的旧分片
+    }
+    if (connections < 2) return false;
+
+    final starts = <int>[0, ...bounds.sublist(0, bounds.length - 1)];
+    var received = 0;
+    for (var i = 0; i < bounds.length; i++) {
+      final f = File('$tmpPath.part$i');
+      received += f.existsSync() ? await f.length() : 0;
+    }
+    episode.totalBytes = received;
+    episode.progressPercent =
+        totalSize > 0 ? received / totalSize : 0;
+    _speedTrackers[key] = _SpeedTracker();
+    _notifyProgress(task, episode);
+
+    var interrupted = false;
+    var partFailed = false;
+    Object? firstError;
+    final futures = <Future<void>>[];
+    for (var i = 0; i < bounds.length; i++) {
+      futures.add(_downloadDirectPart(
+        task: task,
+        videoUrl: videoUrl,
+        httpHeaders: httpHeaders,
+        partPath: '$tmpPath.part$i',
+        rangeStart: starts[i],
+        rangeEnd: bounds[i],
+        onChunk: (len) {
+          received += len;
+          episode.totalBytes = received;
+          episode.progressPercent = received / totalSize;
+          _speedTrackers[key]?.update(received);
+          _notifyProgress(task, episode);
+        },
+        onInterrupt: () => interrupted = true,
+        shouldStop: () => interrupted || partFailed,
+      ));
+    }
+    // 段失败置停其他段并等全部收尾, 避免标记失败后仍有写入者残留
+    // (用户立即重试会双写同一分片)。
+    await Future.wait(futures
+        .map((f) => f.then((_) => null).catchError((e) {
+              partFailed = true;
+              firstError ??= e;
+              return e;
+            })));
+    if (partFailed) {
+      throw firstError!;
+    }
+
+    if (interrupted || task.isPaused || task.cancelToken.isCancelled) {
+      if (task.isPaused) {
+        episode.status = DownloadStatus.paused;
+      }
+      _notifyProgress(task, episode);
+      return null;
+    }
+
+    // 全部段完成: 校验长度并拼接回 tmp
+    for (var i = 0; i < bounds.length; i++) {
+      final f = File('$tmpPath.part$i');
+      final expect = bounds[i] - starts[i];
+      if (!f.existsSync() || await f.length() != expect) {
+        throw NetworkException(
+          type: NetworkExceptionType.unknown,
+          message: '并行分片 $i 校验失败',
+        );
+      }
+    }
+    final out = File(tmpPath);
+    final raf = await out.open(mode: FileMode.write);
+    try {
+      for (var i = 0; i < bounds.length; i++) {
+        final part = File('$tmpPath.part$i');
+        final input = part.openRead();
+        await for (final chunk in input) {
+          await raf.writeFrom(chunk);
+        }
+      }
+    } finally {
+      await raf.close();
+    }
+    await _deletePartFiles(tmpPath, bounds.length);
+    await metaFile.delete();
+    return true;
+  }
+
+  Future<void> _deletePartFiles(String tmpPath, int count) async {
+    for (var i = 0; i < count; i++) {
+      final f = File('$tmpPath.part$i');
+      if (f.existsSync()) await f.delete();
+    }
+  }
+
+  /// 单段下载: 从分片文件当前长度处 Range 续传, 建连/流中断均重试
+  /// (共 3 次; 直连路由存在间歇性重置, 单次失败不代表段不可用)。
+  Future<void> _downloadDirectPart({
+    required DownloadTask task,
+    required String videoUrl,
+    required Map<String, String> httpHeaders,
+    required String partPath,
+    required int rangeStart,
+    required int rangeEnd,
+    required void Function(int len) onChunk,
+    required void Function() onInterrupt,
+    required bool Function() shouldStop,
+  }) async {
+    const maxAttempts = 3;
+    Object? lastError;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (shouldStop() || task.isPaused || task.cancelToken.isCancelled) {
+        onInterrupt();
+        return;
+      }
+      try {
+        final partFile = File(partPath);
+        var pos = partFile.existsSync() ? await partFile.length() : 0;
+        if (rangeStart + pos >= rangeEnd) return; // 本段已完成
+        final headers = Map<String, String>.from(httpHeaders)
+          ..['Range'] = 'bytes=${rangeStart + pos}-${rangeEnd - 1}';
+        final response = await _http.getStream(
+          videoUrl,
+          headers: headers,
+          receiveTimeout: const Duration(minutes: 10),
+          cancelToken: task.cancelToken,
+        );
+        final raf = await partFile
+            .open(mode: pos > 0 ? FileMode.append : FileMode.write);
+        try {
+          await for (final chunk in response.data!.stream) {
+            if (shouldStop() || task.isPaused ||
+                task.cancelToken.isCancelled) {
+              onInterrupt();
+              return;
+            }
+            await raf.writeFrom(chunk);
+            onChunk(chunk.length);
+          }
+        } finally {
+          await raf.close();
+        }
+        return; // 本段完整
+      } catch (e) {
+        if (task.cancelToken.isCancelled ||
+            (e is NetworkException &&
+                e.type == NetworkExceptionType.cancel)) {
+          onInterrupt();
+          return;
+        }
+        lastError = e;
+        if (attempt == maxAttempts) break;
+        await Future.delayed(const Duration(seconds: 2));
+      }
+    }
+    throw lastError ?? NetworkException(
+      type: NetworkExceptionType.unknown,
+      message: '并行分片下载失败',
+    );
   }
 
   void _onTaskComplete(DownloadTask task) {

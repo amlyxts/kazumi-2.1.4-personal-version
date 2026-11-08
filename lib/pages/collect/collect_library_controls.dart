@@ -72,7 +72,8 @@ class _CollectLayoutSwitch extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       spacing: 2,
       children: [
-        for (final layout in [CollectLayout.cards, CollectLayout.list])
+        // [my升级 v2] 三档: 列表/卡片/瀑布流 (瀑布流 opt-in, 默认不变)
+        for (final layout in CollectLayout.values)
           Semantics(
             selected: value == layout,
             inMutuallyExclusiveGroup: true,
@@ -99,18 +100,23 @@ class _CollectLayoutSwitch extends StatelessWidget {
                               ? BorderRadius.circular(24)
                               : BorderRadiusDirectional.horizontal(
                                   start: Radius.circular(
-                                      layout == CollectLayout.cards ? 24 : 8),
+                                      layout.index == 0 ? 24 : 8),
                                   end: Radius.circular(
-                                      layout == CollectLayout.list ? 24 : 8),
+                                      layout.index ==
+                                              CollectLayout.values.length - 1
+                                          ? 24
+                                          : 8),
                                 ),
                     )),
                 animationDuration: MediaQuery.disableAnimationsOf(context)
                     ? Duration.zero
                     : const Duration(milliseconds: 200),
               ),
-              icon: Icon(layout == CollectLayout.list
-                  ? Icons.view_list_rounded
-                  : Icons.grid_view_rounded),
+              icon: Icon(switch (layout) {
+                CollectLayout.list => Icons.view_list_rounded,
+                CollectLayout.cards => Icons.grid_view_rounded,
+                CollectLayout.waterfall => Icons.auto_awesome_mosaic_outlined,
+              }),
             ),
           ),
       ],

@@ -192,6 +192,18 @@ abstract class _PlayerPlaybackController with Store {
     }
   }
 
+  /// [my新增] 自动跳过片头片尾总开关 (面板行与设置页共用; 秒数设置只在
+  /// 判定时读框, 不进 observable)
+  @observable
+  bool autoSkipOpEd = false;
+
+  @action
+  void setAutoSkipOpEd(bool value) {
+    autoSkipOpEd = value;
+    GStorage.putSetting(SettingsKeys.autoSkipOpEd, value);
+  }
+
+
   bool get playerCompleted {
     try {
       return mediaPlayer?.state.completed ?? false;
@@ -274,12 +286,13 @@ abstract class _PlayerPlaybackController with Store {
     VideoSourceFormat videoSourceFormat = VideoSourceFormat.auto,
   }) async {
     startOffset = offset;
-    superResolutionMode = SuperResolutionMode.fromStorageValue(
-      GStorage.getSetting(SettingsKeys.defaultSuperResolutionMode),
-    );
-    if (kDisableSuperResolution) {
-      superResolutionMode = SuperResolutionMode.off;
-    }
+    superResolutionMode =
+          kSupportsSuperResolution
+              ? SuperResolutionMode.fromStorageValue(
+                  GStorage.getSetting(
+                      SettingsKeys.defaultSuperResolutionMode),
+                )
+              : SuperResolutionMode.off;
     hAenable = GStorage.getSetting(SettingsKeys.hAenable);
     androidEnableOpenSLES =
         GStorage.getSetting(SettingsKeys.androidEnableOpenSLES);
@@ -457,6 +470,27 @@ abstract class _PlayerPlaybackController with Store {
       final bool debandEnable = !kDisablePlayerDeband &&
           GStorage.getSetting(SettingsKeys.playerDebandEnable);
       await pp.setProperty('deband', debandEnable ? 'yes' : 'no');
+      // [my修复] 缩放器全程 mpv 默认双线性 → 超分 2x 后回缩屏幕发糊
+      // (1080p 源+1080p 屏尤其明显, 探查报告缺陷 1)。按 anime 社区标准
+      // 配置缩放链 (agyild SSim 系着色器同款推荐配置); 仅桌面端 —
+      // 移动端 GPU 差异大, 不动默认避免性能回退。
+      if (isDesktop()) {
+        await pp.setProperty('scale', 'ewa_lanczossharp');
+        await pp.setProperty('dscale', 'mitchell');
+        await pp.setProperty('cscale', 'spline36');
+        await pp.setProperty('correct-downscaling', 'yes');
+        await pp.setProperty('linear-downscaling', 'no');
+        await pp.setProperty('sigmoid-upscaling', 'yes');
+      }
+      // [my修改] 运动补偿: 帧时钟对齐刷新率, 消除 24fps 源的规律性顿挫
+      // (120Hz=5x24 整数倍屏收益最大; tscale 用 mpv 默认 oversample, 无鬼影)。
+      final bool motionCompensationEnable = GStorage.getSetting(
+        SettingsKeys.playerMotionCompensationEnable,
+      );
+      await pp.setProperty('video-sync',
+          motionCompensationEnable ? 'display-resample' : 'audio');
+      await pp.setProperty(
+          'interpolation', motionCompensationEnable ? 'yes' : 'no');
       if (!isCurrentPlayer(player)) {
         return await _discardIfNotCurrent(candidate);
       }
@@ -550,11 +584,38 @@ abstract class _PlayerPlaybackController with Store {
             ),
           ]);
           break;
+        // [my修改] 动漫专用新档: ArtCNN 超质 + 感知画质增强三件套
+        case SuperResolutionMode.artcnn:
+          await pp.command([
+            'change-list',
+            'glsl-shaders',
+            'set',
+            buildShadersAbsolutePath(
+              shaderAssetService.shadersDirectory.path,
+              mpvArtCNNShaders,
+            ),
+          ]);
+          break;
+        case SuperResolutionMode.enhance:
+          await pp.command([
+            'change-list',
+            'glsl-shaders',
+            'set',
+            buildShadersAbsolutePath(
+              shaderAssetService.shadersDirectory.path,
+              mpvEnhanceShaders,
+            ),
+          ]);
+          break;
         case SuperResolutionMode.off:
           await pp.command(['change-list', 'glsl-shaders', 'clr', '']);
           break;
       }
       superResolutionMode = mode;
+      // [my修改] 播放器面板选择的档位同步持久化: 上游只认设置页入口写盘,
+      // 快菜单选的档重进播放页就丢, 与"记住我的超分档位"的直觉相悖。
+      await GStorage.putSetting(
+          SettingsKeys.defaultSuperResolutionMode, mode.storageValue);
     } catch (e) {
       KazumiLogger().w('PlayerController: failed to set shader', error: e);
     }

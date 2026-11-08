@@ -5,6 +5,10 @@ import 'package:kazumi/plugins/api_rule_config.dart';
 import 'package:kazumi/request/config/api_endpoints.dart';
 import 'package:kazumi/services/plugin/api_rule_engine.dart';
 import 'package:kazumi/utils/episode_url.dart';
+import 'package:dio/dio.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
+import 'package:kazumi/request/core/network_exception.dart';
+import 'package:kazumi/services/plugin/plugin_cookie_manager.dart';
 import 'package:kazumi/utils/http_headers.dart';
 
 export 'package:kazumi/services/plugin/rule_engine_models.dart'
@@ -27,6 +31,15 @@ class Plugin {
 
   /// Legacy schema field retained for rule import/export compatibility.
   bool useWebview;
+  // [my修改] 解析走 FlareSolverr (服务端渲染页面直取正片直链, 规避嗅探误抓广告)
+  bool resolveViaFlareSolverr;
+
+  /// [my新增] 取页走「挑战回退」链: 直连命中挑战 (CF/雷池/JS 壳) 时改用
+  /// 隐藏 WebView 取页, 失败兜底 FlareSolverr。适用于搜索/章节被挑战挡住的源。
+  bool webviewFetch;
+
+  /// [my新增] 搜索结果严格匹配 (模糊站噪声治理, 见 RuleExecutionConfig 注释)。
+  bool strictSearchMatch;
 
   /// Legacy schema field retained for rule import/export compatibility.
   bool useNativePlayer;
@@ -55,6 +68,9 @@ class Plugin {
     required this.version,
     required this.muliSources,
     required this.useWebview,
+    this.resolveViaFlareSolverr = false,
+    this.webviewFetch = false,
+    this.strictSearchMatch = false,
     required this.useNativePlayer,
     required this.usePost,
     required this.useLegacyParser,
@@ -85,6 +101,10 @@ class Plugin {
       version: json['version']?.toString() ?? '',
       muliSources: json['muliSources'] as bool? ?? true,
       useWebview: json['useWebview'] as bool? ?? true,
+      resolveViaFlareSolverr:
+          json['resolveViaFlareSolverr'] as bool? ?? false,
+      webviewFetch: json['webviewFetch'] as bool? ?? false,
+      strictSearchMatch: json['strictSearchMatch'] as bool? ?? false,
       useNativePlayer: json['useNativePlayer'] as bool? ?? true,
       usePost: json['usePost'] ?? false,
       useLegacyParser: json['useLegacyParser'] ?? false,
@@ -155,6 +175,9 @@ class Plugin {
       'version': version,
       'muliSources': muliSources,
       'useWebview': useWebview,
+      'resolveViaFlareSolverr': resolveViaFlareSolverr,
+      'webviewFetch': webviewFetch,
+      'strictSearchMatch': strictSearchMatch,
       'useNativePlayer': useNativePlayer,
       'usePost': usePost,
       'useLegacyParser': useLegacyParser,
@@ -185,6 +208,9 @@ class Plugin {
 
   bool get requiresNewerClient => int.parse(api) > ApiEndpoints.apiLevel;
 
+  /// [my新增] 体检工具用公开视图 (私有 _executionConfig 的只读复用)
+  RuleExecutionConfig get healthConfig => _executionConfig;
+
   RuleExecutionConfig get _executionConfig => RuleExecutionConfig(
         pluginName: name,
         baseUrl: baseUrl,
@@ -200,6 +226,8 @@ class Plugin {
         searchApiConfig: searchApiConfig,
         chapterApiConfig: chapterApiConfig,
         antiCrawlerConfig: antiCrawlerConfig,
+        webviewFetch: webviewFetch,
+        strictSearchMatch: strictSearchMatch,
       );
 
   Future<RuleSearchTrace> traceSearch(
@@ -239,20 +267,117 @@ class Plugin {
     try {
       return (await traceSearch(keyword, cancelToken: cancelToken)).response;
     } on CaptchaRequiredException {
+      // [my修改] FlareSolverr 分流: 挑战页交给本地求解服务, 成功则播种凭证
+      // 并直接出结果; 未配置/失败才回退验证码流程 (rethrow)。
+      final solved = await querySearchViaFlareSolverr(keyword);
+      if (solved != null) return solved;
       rethrow;
-    } on NoResultException {
-      rethrow;
-    } on SearchErrorException {
+    } on SearchErrorException catch (error) {
+      // [my修改] 被墙站直连必然连接超时 (无 403 响应体可检测):
+      // FlareSolverr 已配置时同样分流, 由它的无头浏览器代取页面。
+      if (_isSearchConnectionTimeout(error)) {
+        final solved = await querySearchViaFlareSolverr(keyword);
+        if (solved != null) return solved;
+      }
       if (shouldRethrow) rethrow;
       return PluginSearchResponse(pluginName: name, data: <SearchItem>[]);
     }
+  }
+
+  /// [my修改] 经 FlareSolverr 渲染搜索页: 返回结果; 未配置/失败/解析不出返回
+  /// null (调用方回退验证码流程)。顺带把过盾凭证与 UA 播种到凭证管理,
+  /// 供后续 dio 请求使用。
+  Future<PluginSearchResponse?> querySearchViaFlareSolverr(
+      String keyword) async {
+    if (!FlareSolverrService.isConfigured) return null;
+    final url = buildSearchUrl(keyword);
+    if (url == null) return null;
+    final solution = await FlareSolverrService.solve(url);
+    if (solution == null) return null;
+    try {
+      await PluginCookieManager.instance.saveFromWebView(
+          name, url, solution.cookieString,
+          userAgent: solution.userAgent);
+    } catch (_) {}
+    return parseHarvestedSearch(solution.html);
+  }
+
+  /// [my修改] 经 FlareSolverr 渲染播放页并解析线路; 返回 null = 未配置/失败。
+  Future<List<Road>?> queryChaptersViaFlareSolverr(String source) async {
+    if (!FlareSolverrService.isConfigured) return null;
+    // [my提速] curl 快速通道优先 (~2s): CF 按 TLS 指纹拦 dart 栈,
+    // Schannel 指纹可过, cookies 取过盾持久化。播放链路里取集与直链解析
+    // 抓同一 watch 页, curlFetch 的短缓存让第二次抓取免网络。
+    // 解析不出线路 (挑战页/cookies 失效) 再落 FS 求解 (同时刷新 cookies)。
+    final curlHtml = await FlareSolverrService.curlFetch(source);
+    if (curlHtml != null) {
+      final roads = parseHarvestedRoads(curlHtml);
+      if (roads != null && roads.isNotEmpty) return roads;
+    }
+    final solution = await FlareSolverrService.solve(source);
+    if (solution == null) return null;
+    try {
+      await PluginCookieManager.instance.saveFromWebView(
+          name, source, solution.cookieString,
+          userAgent: solution.userAgent);
+    } catch (_) {}
+    return parseHarvestedRoads(solution.html);
+  }
+
+  /// [my修改] 渲染搜索 URL 而不发请求 (FlareSolverr 分流用)。
+  String? buildSearchUrl(String keyword) {
+    return _ruleEngine.buildSearchRequestUrl(_executionConfig, keyword);
+  }
+
+  /// [my修改] 从已取回的 HTML 解析播放线路 (FlareSolverr 分流用)。
+  List<Road>? parseHarvestedRoads(String html) {
+    return _ruleEngine.tryParseHarvestedRoads(_executionConfig, html);
   }
 
   Future<List<Road>> queryChapterRoads(
     String source, {
     RuleCancelToken? cancelToken,
   }) async {
-    return (await traceChapters(source, cancelToken: cancelToken)).roads;
+    try {
+      return (await traceChapters(source, cancelToken: cancelToken)).roads;
+    } on CaptchaRequiredException {
+      // [my修改] FlareSolverr 分流 (同搜索环节)
+      final solved = await queryChaptersViaFlareSolverr(source);
+      if (solved != null) return solved;
+      rethrow;
+    } on ChapterErrorException catch (error) {
+      // [my修改] FlareSolverr 分流覆盖两种形态: 被墙站直连的连接超时,
+      // 以及应用代理下 CF 对 dio 指纹的 403 拦截 (响应体含挑战标记)。
+      final solved = _chaptersNeedsFlareSolverr(error)
+          ? await queryChaptersViaFlareSolverr(source)
+          : null;
+      if (solved != null) return solved;
+      rethrow;
+    }
+  }
+
+  // [my修改] 章节取集是否应交给 FlareSolverr: 连接超时 (被墙直连) 或
+  // 403 + 挑战标记 (CF 对 dio TLS 指纹的拦截)。
+  bool _chaptersNeedsFlareSolverr(ChapterErrorException error) {
+    final cause = error.cause;
+    if (cause is! NetworkException) return false;
+    if (cause.type == NetworkExceptionType.connectionTimeout) return true;
+    if (cause.type == NetworkExceptionType.badResponse &&
+        cause.statusCode == 403) {
+      final raw = cause.rawError;
+      final body =
+          raw is DioException ? (raw.response?.data?.toString() ?? '') : '';
+      return body.contains('challenge-platform') ||
+          body.contains('Attention Required');
+    }
+    return false;
+  }
+
+  // [my修改] 连接超时判定 (被墙站直连的标志性失败形态)
+  bool _isSearchConnectionTimeout(SearchErrorException error) {
+    final cause = error.cause;
+    return cause is NetworkException &&
+        cause.type == NetworkExceptionType.connectionTimeout;
   }
 
   String buildFullUrl(String urlItem) {

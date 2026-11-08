@@ -21,14 +21,20 @@ class CollectedBangumi {
   @HiveField(2)
   int type;
 
+  /// [my新增] 收藏分区: 0=表番 (默认, 可同步 Bangumi) / 1=里番区
+  /// (纯本地+WebDAV, 永不上传 Bangumi)。旧数据无此字段读取时归 0。
+  @HiveField(3)
+  int section;
+
   String get key => bangumiItem.id.toString();
 
-  CollectedBangumi(this.bangumiItem, this.time, this.type);
+  CollectedBangumi(this.bangumiItem, this.time, this.type,
+      {this.section = 0});
 
   static String getKey(BangumiItem bangumiItem) => bangumiItem.id.toString();
 
   @override
   String toString() {
-    return 'type: $type, time: $time, anime: ${bangumiItem.name}';
+    return 'type: $type, time: $time, section: $section, anime: ${bangumiItem.name}';
   }
 }

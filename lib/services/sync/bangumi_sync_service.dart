@@ -172,8 +172,12 @@ class BangumiSyncService extends ChangeNotifier {
           onProgress: onProgress,
         );
 
+        // [my修改] 里番区 (section=1) 永不上传 Bangumi — 从本地侧剔除,
+        // 远端也不会有这些条目, 双向都不受影响
         final mergePlan = CollectSyncMerger.planBangumi(
-          localCollectibles: GStorage.collectibles.values.toList(),
+          localCollectibles: GStorage.collectibles.values
+              .where((c) => c.section != 1)
+              .toList(),
           remoteCollections: remoteCollection,
           priority: priority,
         );

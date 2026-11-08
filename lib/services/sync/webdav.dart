@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:io';
+import 'package:dio/io.dart';
 import 'package:webdav_client/webdav_client.dart' as webdav;
 import 'package:path_provider/path_provider.dart';
 import 'package:kazumi/modules/history/history_sync.dart';
@@ -7,6 +9,7 @@ import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/modules/collect/collect_change_module.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/services/sync/history_sync_service.dart';
 import 'package:kazumi/services/sync/webdav_remote_file_commit.dart';
 import 'package:kazumi/utils/async_serial_queue.dart';
@@ -60,6 +63,18 @@ class WebDav {
     );
     client.setHeaders({'accept-charset': 'utf-8'});
     client.c.options.contentType = 'application/octet-stream';
+    // [my新增] 自建 WebDAV 服务器自签证书信任开关 (默认关; 仅自建
+    // rclone serve webdav 等场景使用, 公共云盘保持关闭)。
+    // createHttpClient=握手期接受自签 (OS 拒绝发生在 badCertificateCallback
+    // 阶段, validateCertificate 管不到); validateCertificate=叶证书二道确认。
+    if (GStorage.getSetting(SettingsKeys.webDavTrustSelfSigned)) {
+      final adapter = client.c.httpClientAdapter;
+      if (adapter is IOHttpClientAdapter) {
+        adapter.createHttpClient = () =>
+            HttpClient()..badCertificateCallback = (cert, host, port) => true;
+        adapter.validateCertificate = (cert, host, port) => true;
+      }
+    }
     try {
       await client.ping();
       await _ensureRemoteDirectory(_syncRootPath);
@@ -90,6 +105,175 @@ class WebDav {
   bool get isDanmakuShieldSyncEnabled =>
       GStorage.getSetting(SettingsKeys.webDavEnable) &&
       GStorage.getSetting(SettingsKeys.webDavEnableDanmakuShield);
+
+  static const String _danmakuAlignmentPath =
+      '$_syncRootPath/danmakuAlignment';
+
+  bool get isDanmakuAlignmentSyncEnabled =>
+      GStorage.getSetting(SettingsKeys.webDavEnable) &&
+      GStorage.getSetting(SettingsKeys.webDavEnableDanmakuAlignment);
+
+  /// [my新增] 弹幕对齐表同步 (仿弹幕屏蔽词: per-device JSON, 合并回调
+  /// 在服务层做时间戳新旧取舍)。
+  static const String _pluginsPath = '$_syncRootPath/plugins.json';
+  static const String _settingsPath = '$_syncRootPath/settings.json';
+
+  bool get isPluginSyncEnabled =>
+      GStorage.getSetting(SettingsKeys.webDavEnable) &&
+      GStorage.getSetting(SettingsKeys.webDavEnablePluginSync);
+
+  bool get isSettingsSyncEnabled =>
+      GStorage.getSetting(SettingsKeys.webDavEnable) &&
+      GStorage.getSetting(SettingsKeys.webDavEnableSettingsSync);
+
+  /// [my新增] 插件清单同步: 并集合并 (按插件名), 回调在控制器层做合并裁决。
+  Future<void> syncPlugins({
+    required Future<String> Function(String remoteJson) merge,
+    required String Function() export,
+  }) {
+    return _runWebDavExclusive(() async {
+      if (!isPluginSyncEnabled) return;
+      if (!initialized) await _init();
+      await _ensureLocalTempDirectory();
+      await _ensureRemoteDirectory(_syncRootPath);
+      final runDirectory =
+          await webDavLocalTempDirectory.createTemp('plugin-sync-');
+      try {
+        var remoteJson = '';
+        final file = File('${runDirectory.path}/remote.json');
+        try {
+          await client.read2File(_pluginsPath, file.path);
+          remoteJson = await file.readAsString();
+        } catch (_) {
+          remoteJson = ''; // 云端还没有清单
+        }
+        if (!isPluginSyncEnabled) return;
+        final merged = await merge(remoteJson);
+        final upload = File('${runDirectory.path}/local.json');
+        await upload.writeAsString(merged, flush: true);
+        await _publishRemoteFile(
+          sourceFilePath: upload.path,
+          destinationPath: _pluginsPath,
+          temporaryPath: '$_pluginsPath.cache',
+        );
+      } finally {
+        await runDirectory.delete(recursive: true);
+      }
+    });
+  }
+
+  /// [my新增] 设置快照同步 (排除名单外的键), 最近写入优先 (updatedAt)。
+  Future<void> syncSettings({
+    required Future<Map<String, dynamic>> Function(
+            Map<String, dynamic> remote, int remoteUpdatedAt)
+        merge,
+    required Map<String, dynamic> Function() export,
+    required int Function() localUpdatedAt,
+  }) {
+    return _runWebDavExclusive(() async {
+      if (!isSettingsSyncEnabled) return;
+      if (!initialized) await _init();
+      await _ensureRemoteDirectory(_syncRootPath);
+      final runDirectory =
+          await webDavLocalTempDirectory.createTemp('settings-sync-');
+      try {
+        var remote = <String, dynamic>{};
+        var remoteUpdatedAt = 0;
+        final file = File('${runDirectory.path}/remote.json');
+        try {
+          await client.read2File(_settingsPath, file.path);
+          final decoded = jsonDecodeOrNull(await file.readAsString());
+          if (decoded is Map<String, dynamic>) {
+            remote = decoded['_data'] is Map<String, dynamic>
+                ? decoded['_data']
+                : decoded;
+            remoteUpdatedAt = (decoded['_updatedAt'] as num?)?.toInt() ?? 0;
+          }
+        } catch (_) {}
+        if (!isSettingsSyncEnabled) return;
+        final merged = await merge(remote, remoteUpdatedAt);
+        final payload = jsonEncode(
+            {'_updatedAt': localUpdatedAt(), '_data': merged});
+        final upload = File('${runDirectory.path}/local.json');
+        await upload.writeAsString(payload, flush: true);
+        await _publishRemoteFile(
+          sourceFilePath: upload.path,
+          destinationPath: _settingsPath,
+          temporaryPath: '$_settingsPath.cache',
+        );
+      } finally {
+        await runDirectory.delete(recursive: true);
+      }
+    });
+  }
+
+  Future<void> syncDanmakuAlignment({
+    required String deviceId,
+    required Future<Map<String, dynamic>> Function(Map<String, dynamic>)
+        merge,
+    required Map<String, dynamic> Function() export,
+  }) {
+    return _runWebDavExclusive(() async {
+      if (!isDanmakuAlignmentSyncEnabled) return;
+      if (!initialized) await _init();
+      await _ensureLocalTempDirectory();
+      await _ensureRemoteDirectory(_danmakuAlignmentPath);
+      final runDirectory =
+          await webDavLocalTempDirectory.createTemp('danmaku-align-sync-');
+      try {
+        var remote = <String, dynamic>{};
+        final entries = await client.readDir(_danmakuAlignmentPath);
+        for (final entry in entries) {
+          final name = entry.name ?? '';
+          if (entry.isDir == true || !name.endsWith('.json')) continue;
+          final file = File('${runDirectory.path}/$name');
+          await client.read2File('$_danmakuAlignmentPath/$name', file.path);
+          final decoded = jsonDecodeOrNull(await file.readAsString());
+          if (decoded is Map<String, dynamic>) {
+            remote = _mergeFlatAlignment(remote, decoded);
+          }
+        }
+        if (!isDanmakuAlignmentSyncEnabled) return;
+        final merged = await merge(remote);
+        final upload = File('${runDirectory.path}/local.json');
+        await upload.writeAsString(jsonEncode(merged), flush: true);
+        final destination = '$_danmakuAlignmentPath/$deviceId.json';
+        await _publishRemoteFile(
+          sourceFilePath: upload.path,
+          destinationPath: destination,
+          temporaryPath: '$destination.cache',
+        );
+      } finally {
+        await runDirectory.delete(recursive: true);
+      }
+    });
+  }
+
+  /// 扁平对齐 JSON 的并集合并 (深一层 srcEp 并集, 值保留远端原样 —
+  /// 新旧裁决交给服务层 merge 回调)
+  Map<String, dynamic> _mergeFlatAlignment(
+      Map<String, dynamic> a, Map<String, dynamic> b) {
+    final out = Map<String, dynamic>.of(a);
+    for (final e in b.entries) {
+      if (e.value is Map) {
+        final existing = out[e.key];
+        if (existing is Map) {
+          out[e.key] = {...existing, ...e.value as Map};
+        } else {
+          out[e.key] = e.value;
+        }
+      }
+    }
+    return out;
+  }
+
+  dynamic jsonDecodeOrNull(String raw) {
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<void> syncDanmakuShield({
     required String deviceId,
@@ -179,6 +363,66 @@ class WebDav {
       });
     } catch (e) {
       KazumiLogger().e('WebDav: update collectibles failed', error: e);
+      rethrow;
+    }
+  }
+
+  /// [my新增] 修复收藏分区并重建云端快照 (一次串行事务内完成):
+  /// 1. 下载云端 collectibles/collectchanges 并合并进本地 (不丢其他设备变更);
+  /// 2. 把被旧版同步 bug 误记为表番的源直连条目迁回里番区 (section=1);
+  /// 3. 用修复后的本地库整包覆盖云端快照。
+  /// 返回迁回的条目数。
+  Future<int> repairCollectSectionsAndRebuildSnapshot() async {
+    try {
+      return await _runWebDavExclusive(() async {
+        List<CollectedBangumi> remoteCollectibles = [];
+        List<CollectedBangumiChange> remoteChanges = [];
+        final files = await client.readDir(_syncRootPath);
+        final collectiblesExists =
+            files.any((file) => file.name == 'collectibles.tmp');
+        final changesExists =
+            files.any((file) => file.name == 'collectchanges.tmp');
+        if (collectiblesExists) {
+          await _downloadBox('collectibles');
+        }
+        if (changesExists) {
+          await _downloadBox('collectchanges');
+        }
+        try {
+          if (collectiblesExists) {
+            remoteCollectibles = await GStorage.getCollectiblesFromFile(
+                '${webDavLocalTempDirectory.path}/collectibles.tmp');
+          }
+          if (changesExists) {
+            remoteChanges = await GStorage.getCollectChangesFromFile(
+                '${webDavLocalTempDirectory.path}/collectchanges.tmp');
+          }
+        } catch (e) {
+          KazumiLogger().e('WebDav: read remote collectibles failed', error: e);
+          throw Exception('WebDav: read remote collectibles failed');
+        }
+        if (remoteCollectibles.isNotEmpty || remoteChanges.isNotEmpty) {
+          await GStorage.patchCollectibles(remoteCollectibles, remoteChanges);
+        }
+        final repaired = GStorage.collectibles.values
+            .where(CollectSectionRepair.isMisplacedDirectCollectible)
+            .toList();
+        for (final collectible in repaired) {
+          collectible.section = 1;
+          await GStorage.putCollectible(collectible);
+        }
+        await GStorage.collectibles.flush();
+        await GStorage.collectChanges.flush();
+        await _updateBox('collectibles');
+        if (GStorage.collectChanges.isNotEmpty) {
+          await _updateBox('collectchanges');
+        }
+        KazumiLogger().i(
+            'WebDav: repaired ${repaired.length} misplaced collect sections');
+        return repaired.length;
+      });
+    } catch (e) {
+      KazumiLogger().e('WebDav: repair collect sections failed', error: e);
       rethrow;
     }
   }

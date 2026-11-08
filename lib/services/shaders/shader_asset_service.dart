@@ -28,16 +28,22 @@ class ShaderAssetService {
     for (var filePath in shaderFiles) {
       final fileName = filePath.split('/').last;
       final targetFile = File(path.join(shadersDirectory.path, fileName));
-      if (await targetFile.exists()) {
-        KazumiLogger()
-            .i('ShaderManager: GLSL Shader exists, skip: ${targetFile.path}');
-        continue;
-      }
-
       try {
+        // [my修复] 旧实现对已存在文件一律跳过 → assets 里的着色器更新
+        // 永远到不了用户机器 (实测 ArtCNN/FSRCNNX 字节数不一致的旧版本
+        // 长期驻留)。改为长度比对: 不一致即覆盖换新。
         final data = await rootBundle.load(filePath);
         final List<int> bytes = data.buffer.asUint8List();
-        await targetFile.writeAsBytes(bytes);
+        if (await targetFile.exists()) {
+          if (await targetFile.length() == bytes.length) {
+            KazumiLogger().i(
+                'ShaderManager: GLSL Shader exists, skip: ${targetFile.path}');
+            continue;
+          }
+          KazumiLogger()
+              .w('ShaderManager: GLSL Shader 更新覆盖: ${targetFile.path}');
+        }
+        await targetFile.writeAsBytes(bytes, flush: true);
         copiedFilesCount++;
         KazumiLogger().i('ShaderManager: Copy: ${targetFile.path}');
       } catch (e) {

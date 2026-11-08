@@ -80,7 +80,8 @@
               sudo apt-get install -y cmake ninja-build g++
             shell: bash
           - name: Run Flutter tests
-            run: flutter test
+            # manual_z_* = 手动诊断工具(真实网络/长耗时), CI 排除
+            run: flutter test --exclude-tags=manual $(ls test/*.dart | grep -v manual_z)
             shell: bash
 
       flutter-analyze:

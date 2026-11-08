@@ -19,6 +19,7 @@ import 'package:kazumi/pages/info/info_controller.dart';
 import 'package:kazumi/pages/info/info_tabview.dart';
 import 'package:kazumi/pages/info/rating_review_dialog.dart';
 import 'package:kazumi/pages/info/source_sheet.dart';
+import 'package:kazumi/pages/direct_search/series_detector.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/platform/desktop_window_config.dart';
@@ -345,11 +346,34 @@ class _InfoPageState extends State<InfoPage>
                     child: Container(
                       width: double.infinity,
                       alignment: Alignment.centerLeft,
-                      child: Text(
-                        infoController.bangumiItem.nameCn == ''
-                            ? infoController.bangumiItem.name
-                            : infoController.bangumiItem.nameCn,
-                      ),
+                      // [my新增] 显示层剥裸尾数字 + 集数角标 (方案一 b),
+                      // 与收藏/历史瓦片口径一致
+                      child: Builder(builder: (context) {
+                        final rawTitle =
+                            infoController.bangumiItem.nameCn == ''
+                                ? infoController.bangumiItem.name
+                                : infoController.bangumiItem.nameCn;
+                        final (displayTitle, episodeNo) =
+                            SeriesDetector.displayNameParts(rawTitle);
+                        return Text.rich(
+                          TextSpan(text: displayTitle, children: [
+                            if (episodeNo != null)
+                              TextSpan(
+                                text: '  $episodeNo',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge
+                                    ?.copyWith(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant,
+                                    ),
+                              ),
+                          ]),
+                        );
+                      }),
                     ),
                   ),
                 ),

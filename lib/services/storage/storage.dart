@@ -345,6 +345,17 @@ class GStorage {
     await _setting.put(key.name, value);
   }
 
+  /// [my新增] 设置云同步用: 原始读写 (类型由存储值自描述)。
+  static dynamic getSettingRaw(SettingKey<Object?> key) =>
+      _setting.get(key.name);
+
+  static Future<void> putSettingRaw(SettingKey<Object?> key, dynamic value) {
+    return _setting.put(key.name, value);
+  }
+
+  /// [my新增] 设置框全量变更流 (设置云同步的推送触发源)。
+  static Stream<void> get settingChanges => _setting.watch().map((_) {});
+
   static Stream<void> watchSettings(Iterable<SettingKey<Object?>> keys) {
     final names = keys.map((key) => key.name).toSet();
     return _setting.watch().where((event) => names.contains(event.key)).map((_) {});

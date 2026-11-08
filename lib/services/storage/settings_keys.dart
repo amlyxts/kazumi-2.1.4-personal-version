@@ -97,6 +97,58 @@ class SettingsKeys {
     10,
     group: SettingGroup.player,
   );
+  // [my新增] 自动跳过片头片尾: 社区数据源 (aniskip) 无数据时回退手动秒数。
+  // 总开关默认关 (尊重用户); 秒数 0 = 不跳。
+  static const autoSkipOpEd = SettingKey<bool>(
+    'autoSkipOpEd',
+    false,
+    group: SettingGroup.player,
+  );
+  static const autoSkipOpManualSeconds = SettingKey<int>(
+    'autoSkipOpManualSeconds',
+    0,
+    group: SettingGroup.player,
+  );
+  static const autoSkipEdManualSeconds = SettingKey<int>(
+    'autoSkipEdManualSeconds',
+    0,
+    group: SettingGroup.player,
+  );
+  /// [my新增] 跳过数据源镜像 (自建 frp 反代, iOS 无代理环境用): base 形如
+  /// http://host:31033, token 为镜像校验头; 两键不注册 all → 不云同步
+  /// (镜像地址含家网拓扑属个人隐私)。留空 = 默认直连/走代理。
+  static const skipMirrorBase = SettingKey<String>(
+    'skipMirrorBase',
+    '',
+    group: SettingGroup.player,
+  );
+  static const skipMirrorToken = SettingKey<String>(
+    'skipMirrorToken',
+    '',
+    group: SettingGroup.player,
+  );
+  /// [my新增] 跳过区间错标黑名单 (SkipTimeService 用, JSON: skipId → 元数据;
+  /// 非用户设置, 派生数据; 不注册 all → 不云同步)
+  static const skipBlacklist = SettingKey<String>(
+    'skipBlacklist',
+    '',
+    group: SettingGroup.player,
+  );
+  /// bgm 原名 → MAL id 映射持久缓存 (SkipTimeService 用, 每番一条; 非用户
+  /// 设置, 派生数据; 不注册 all → 不云同步)
+  static const skipTimeIdMap = SettingKey<String>(
+    'skipTimeIdMap',
+    '',
+    group: SettingGroup.player,
+  );
+  /// [my新增] 封面自然比例持久缓存 (瀑布流档, url → w/h): 首次进页逐卡
+  /// 解析会有可感跳动, 持久化后二次进页按存值直接首建。派生数据, 不注册
+  /// all → 不云同步。
+  static const collectCoverRatioCache = SettingKey<String>(
+    'collectCoverRatioCache',
+    '',
+    group: SettingGroup.collect,
+  );
   static const danmakuEnhance = SettingKey<bool>(
     _SettingBoxKey.danmakuEnhance,
     true,
@@ -445,6 +497,58 @@ class SettingsKeys {
     false,
     group: SettingGroup.proxy,
   );
+  // [my修改] FlareSolverr (本地 CF 挑战求解服务): 地址留空 = 功能关闭。
+  // 代理地址用于让 FlareSolverr 的无头浏览器与应用走同一代理出口,
+  // 否则求解得到的 cf_clearance 因出口 IP 不匹配对本应用无效。
+  static const flareSolverrUrl = SettingKey<String>(
+    'flareSolverrUrl',
+    '',
+    group: SettingGroup.proxy,
+  );
+  static const flareSolverrProxy = SettingKey<String>(
+    'flareSolverrProxy',
+    '',
+    group: SettingGroup.proxy,
+  );
+  // [my修改] 过盾产物持久化 (cf_clearance cookies + 绑定 UA): 重启后浏览页
+  // dio 快速通道可即刻复用, 首屏不必等 FlareSolverr 求解; 失效时挑战检测自动回退。
+  static const flareSolverrCookies = SettingKey<String>(
+    'flareSolverrCookies',
+    '',
+    group: SettingGroup.proxy,
+  );
+  static const flareSolverrUA = SettingKey<String>(
+    'flareSolverrUA',
+    '',
+    group: SettingGroup.proxy,
+  );
+  // [my修改] 用户自配的追加代理白名单 (逗号分隔域名), 站名不写入代码。
+  static const proxyWhitelistExtra = SettingKey<String>(
+    'proxyWhitelistExtra',
+    '',
+    group: SettingGroup.proxy,
+  );
+  // [my修改] 源直连浏览的站点首页 (卡片结构解析基准), 站名不写入代码。
+  static const directSearchSite = SettingKey<String>(
+    'directSearchSite',
+    '',
+    group: SettingGroup.proxy,
+  );
+  // [my修改] 源直连浏览的手动认领 (卡片 href → bgm 条目 id/评分), 自动匹配
+  // 漏网时用户手动绑定; JSON map 落设置框, 绑定关系只存本地。
+  static const directSearchClaims = SettingKey<String>(
+    'directSearchClaims',
+    '',
+    group: SettingGroup.proxy,
+  );
+  // [my新增] 源直连浏览的站内搜索历史: JSON 字符串数组 (新在前, 上限 20),
+  // 供输入框下拉回填; 与主搜索页 Bangumi 搜索历史 (Hive box) 互不混用,
+  // 不注册进 all → 不参与云同步, R18 关键词只留本地 (同 directSearchClaims)。
+  static const directSearchKeywordHistory = SettingKey<String>(
+    'directSearchKeywordHistory',
+    '',
+    group: SettingGroup.proxy,
+  );
   static const proxyConfigured = SettingKey<bool>(
     _SettingBoxKey.proxyConfigured,
     false,
@@ -469,6 +573,12 @@ class SettingsKeys {
     'defaultCollectLayout',
     'list',
     group: SettingGroup.interface,
+  );
+  // [my新增] 里番收藏页布局记忆 (与追番页独立)
+  static const adultCollectLayout = SettingKey<String>(
+    'adultCollectLayout',
+    'cards',
+    group: SettingGroup.collect,
   );
   static const downloadParallelEpisodes = SettingKey<int>(
     _SettingBoxKey.downloadParallelEpisodes,
@@ -514,10 +624,107 @@ class SettingsKeys {
     false,
     group: SettingGroup.player,
   );
+  // [my修改] 运动补偿 (display-resample + interpolation): 消除 24fps 源在
+  // 非整数倍刷新率屏上的顿挫; 120Hz(=5x24) 屏收益最大, 非"补帧"。
+  static const playerMotionCompensationEnable = SettingKey<bool>(
+    'playerMotionCompensationEnable',
+    false,
+    group: SettingGroup.player,
+  );
   static const downloadParallelSegments = SettingKey<int>(
     _SettingBoxKey.downloadParallelSegments,
     3,
     group: SettingGroup.download,
+  );
+  // [my新增] 直链视频 (单文件 mp4) 的并行连接数: 文件切 N 段 Range 并行
+  // 下载 (实测 4 连接 ~2.1x)。仅对直链路径生效, m3u8 走分片并发数。
+  static const downloadDirectConnections = SettingKey<int>(
+    'downloadDirectConnections',
+    4,
+    group: SettingGroup.download,
+  );
+  // [my新增] 弹幕集数对齐: 锚点表 (源集→episodeId), WebDAV 同步开关与设备id
+  static const danmakuAlignmentMap = SettingKey<String>(
+    'danmakuAlignmentMap',
+    '',
+    group: SettingGroup.danmaku,
+  );
+  static const webDavEnableDanmakuAlignment = SettingKey<bool>(
+    'webDavEnableDanmakuAlignment',
+    false,
+    group: SettingGroup.sync,
+  );
+  static const danmakuAlignmentDeviceId = SettingKey<String>(
+    'danmakuAlignmentDeviceId',
+    '',
+    group: SettingGroup.sync,
+  );
+  // [my新增] 插件/设置云同步开关 (第五/六路)
+  static const webDavEnablePluginSync = SettingKey<bool>(
+    'webDavEnablePluginSync',
+    false,
+    group: SettingGroup.sync,
+  );
+  static const webDavEnableSettingsSync = SettingKey<bool>(
+    'webDavEnableSettingsSync',
+    false,
+    group: SettingGroup.sync,
+  );
+  // [my新增] 信任 WebDAV 自签证书 (自建 rclone serve webdav 等场景):
+  // 默认关; 信任策略属单机安全决策, 不注册 all → 不云同步。
+  static const webDavTrustSelfSigned = SettingKey<bool>(
+    'webDavTrustSelfSigned',
+    false,
+    group: SettingGroup.webdav,
+  );
+  static const webDavSettingsSyncUpdatedAt = SettingKey<int>(
+    'webDavSettingsSyncUpdatedAt',
+    0,
+    group: SettingGroup.sync,
+  );
+  // [my新增] 源直连浏览页缓存磁盘持久化 (App 重启后首屏秒开, SWR 刷新)
+  static const directSearchPageCache = SettingKey<String>(
+    'directSearchPageCache',
+    '',
+    group: SettingGroup.proxy,
+  );
+  // [my新增] 隐藏直连(里番来源)历史: 开启后历史页全部/在线/缓存三档
+  // 均不显示直连条目, "直连"档不出现 — 双平台通用 (默认关)
+  static const hideDirectHistory = SettingKey<bool>(
+    'hideDirectHistory',
+    false,
+    group: SettingGroup.misc,
+  );
+
+  // [my新增] 里番区随机选片: 抽取/跳过历史 (JSON) 与全局衰减标记
+  static const adultRandomPickHistory = SettingKey<String>(
+    'adultRandomPickHistory',
+    '',
+    group: SettingGroup.collect,
+  );
+  // [my新增] 里番区 bgm 关联映射 (JSON: 收藏键 → {bgmId, nameCn, score})
+  // bgm API 搜索端点屏蔽 nsfw (合规), 故用网页 cookie 搜索 + 按 ID 直取
+  static const adultBgmMap = SettingKey<String>(
+    'adultBgmMap',
+    '',
+    group: SettingGroup.collect,
+  );
+  // [my新增] bgm.tv 网页 cookie (自动登录捕获; 也可从浏览器手动提取)
+  static const bgmWebCookie = SettingKey<String>(
+    'bgmWebCookie',
+    '',
+    group: SettingGroup.collect,
+  );
+  // [my新增] bgm 账号 (cookie 过期自动重登用; 明文本地存储, 与 WebDAV 同级)
+  static const bgmAccountEmail = SettingKey<String>(
+    'bgmAccountEmail',
+    '',
+    group: SettingGroup.collect,
+  );
+  static const bgmAccountPassword = SettingKey<String>(
+    'bgmAccountPassword',
+    '',
+    group: SettingGroup.collect,
   );
   static const downloadDanmaku = SettingKey<bool>(
     _SettingBoxKey.downloadDanmaku,
@@ -688,8 +895,19 @@ class SettingsKeys {
     proxyTestUrl,
     showRating,
     defaultCollectLayout,
+    adultCollectLayout,
     downloadParallelEpisodes,
     downloadParallelSegments,
+    downloadDirectConnections,
+    danmakuAlignmentMap,
+    webDavEnableDanmakuAlignment,
+    danmakuAlignmentDeviceId,
+    webDavEnablePluginSync,
+    webDavEnableSettingsSync,
+    webDavSettingsSyncUpdatedAt,
+    directSearchPageCache,
+    adultRandomPickHistory,
+    hideDirectHistory,
     downloadDanmaku,
     downloadDirectory,
     downloadDirectoryBookmark,
@@ -707,6 +925,47 @@ class SettingsKeys {
     defaultVolume,
     playerMuted,
   ];
+
+  /// [my新增] 设置云同步排除名单: 敏感凭据/一次性流程标记/平台相关项
+  /// 不入云 (跨设备指错路径或泄露凭据)。
+  static const Set<String> settingsSyncExcluded = {
+    // [my] 隐藏直连历史: 各设备独立开关 (iOS 开/Windows 关是典型组合),
+    // 同步会互相覆盖
+    'hideDirectHistory',
+    'bangumiAccessToken',
+    'proxyConfigured',
+    'shortcutDialogShown',
+    'onboardingCompleted',
+    'defaultStartupPage',
+    'downloadDirectory',
+    'downloadDirectoryBookmark',
+    'webDavURL',
+    'webDavUsername',
+    'webDavPassword',
+    'webDavEnable',
+    'webDavEnableHistory',
+    'webDavEnableCollect',
+    'webDavEnableDanmakuShield',
+    'webDavEnableDanmakuAlignment',
+    'webDavEnablePluginSync',
+    'webDavEnableSettingsSync',
+    'webDavSettingsSyncUpdatedAt',
+    'danmakuAlignmentDeviceId',
+    'danmakuShieldSyncDeviceId',
+    'danmakuShieldSyncState',
+    'danmakuShieldSyncCorruptState',
+    'historySyncSnapshotInitialized',
+    'flareSolverrCookies',
+    'flareSolverrUA',
+  };
+
+  /// [my新增] 按名称查键 (设置云同步合并用; 版本差异时云端多出的键安全跳过)
+  static SettingKey<Object?>? byName(String name) {
+    for (final key in all) {
+      if (key.name == name) return key;
+    }
+    return null;
+  }
 
   static List<SettingKey<Object?>> byGroup(SettingGroup group) {
     return [

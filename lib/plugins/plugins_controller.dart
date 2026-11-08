@@ -134,6 +134,41 @@ abstract class _PluginsController with Store {
   List<dynamic> _pluginListToJson() =>
       [for (final plugin in pluginList) plugin.toJson()];
 
+  // ====== [my新增] 云同步 (AssetsSyncService): JSON 导出/导入/并集合并 ======
+
+  String exportPluginsJson() => jsonEncode(_pluginListToJson());
+
+  /// 导入云端清单: 清空本地后按云端重建 (调用方负责合并裁决——并集时
+  /// 先算差集再调本方法只导入缺失项)
+  Future<void> importPluginsJson(String jsonData) async {
+    final List<dynamic> json = jsonDecode(jsonData);
+    pluginList
+      ..clear()
+      ..addAll([for (final item in json) Plugin.fromJson(item)]);
+    await _savePlugins();
+    KazumiLogger().i('Plugin: imported ${pluginList.length} plugins from sync');
+  }
+
+  /// 并集合并: 返回 (合并后 JSON, 需落本的云端缺失项数)。
+  /// 同名插件本地为准 (本地是用户当前正在用的状态)。
+  ({String json, int imported}) mergePluginsJson(
+      String localJson, String remoteJson) {
+    final local = (jsonDecode(localJson) as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final remote = (jsonDecode(remoteJson) as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final localNames = local.map((e) => e['name']).toSet();
+    final missing = remote.where((e) => !localNames.contains(e['name'])).toList();
+    if (missing.isEmpty) {
+      return (json: localJson, imported: 0);
+    }
+    return (json: jsonEncode([...local, ...missing]), imported: missing.length);
+  }
+
   Future<void> removePlugin(Plugin plugin) {
     return _mutateAndPersist(
       () => pluginList.removeWhere(

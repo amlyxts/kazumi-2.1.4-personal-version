@@ -32,16 +32,31 @@ class NetworkConfig {
   /// Intentionally does not include bangumi API hosts (api.bgm.tv/next.bgm.tv) —
   /// those go through the acceleration channel (in ECH mode, proxying would defeat ECH's purpose).
   static const List<String> _proxyWhitelistHosts = [
-    // [my修改] dandanplay.com 已移出: 国内 Azure 节点直连稳定 (~0.38s, 走代理 4.6s
-    // 且依赖 Clash 存活), 2026-10-17 实测定案。若运营商直连劣化再加回。
     'cloudflarestorage.com',
     'bgmapi.com',
     'kazumi.fyi',
     'gugu3.com',
+    // [my新增] 自动跳过片头片尾数据源 (AniList id 映射 + aniskip 区间):
+    // 外域 API, 直连不可达 (实测与浏览站点同病), 必须走代理
+    'anilist.co',
+    'aniskip.com',
   ];
 
-  static bool _shouldProxyHost(String host) =>
-      _proxyWhitelistHosts.any((h) => host.contains(h));
+  /// [my修改] 用户自配的追加白名单 (设置键 proxyWhitelistExtra, 逗号分隔
+  /// 域名), 用于不写入代码的被墙规则源 —— 站名只存在于本地配置。
+  static bool _shouldProxyHost(String host) {
+    if (_proxyWhitelistHosts.any((h) => host.contains(h))) return true;
+    // [my修改] 源直连浏览站点自动纳入白名单: 这类站直连不可达 (实测 TCP
+    // 握手超时), 站名只存本地配置; 浏览页 dio 通道与同站规则源检索共用此判定。
+    final site = GStorage.getSetting(SettingsKeys.directSearchSite).trim();
+    if (site.isNotEmpty && (Uri.tryParse(site)?.host ?? '') == host) {
+      return true;
+    }
+    final extra = GStorage.getSetting(SettingsKeys.proxyWhitelistExtra);
+    return extra
+        .split(',')
+        .any((h) => h.trim().isNotEmpty && host.contains(h.trim()));
+  }
 
   Uri? proxyForUri(Uri uri) {
     // [my modification] Bangumi API hosts go through the acceleration channel (direct/ECH), do not take the whitelist proxy

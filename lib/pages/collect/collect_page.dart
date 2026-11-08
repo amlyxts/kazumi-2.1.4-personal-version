@@ -13,6 +13,8 @@ import 'package:kazumi/modules/collect/collect_layout.dart';
 import 'package:kazumi/modules/collect/collect_sync_plan.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/pages/adult_collect/adult_random_pick_sheet.dart';
+import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/collect/collect_library_view.dart';
 import 'package:kazumi/pages/collect/collect_sync_dialog.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -66,6 +68,24 @@ class _CollectPageState extends State<CollectPage> with KazumiDialogOwner {
   void _changeLayout(CollectLayout layout) {
     if (_layout == layout) return;
     setState(() => _layout = layout);
+    // [my修改] 按钮切换即持久化 — 上游设计为"仅设置页修改才落盘",
+    // 追番页按钮只是临时布局 (切页签/重启即丢), 与里番页行为不一致。
+    unawaited(GStorage.putSetting(
+        SettingsKeys.defaultCollectLayout, layout.name));
+  }
+
+  /// [my新增] 随机选片 (表番区): 加权轮盘从"想看"抽三选一,
+  /// 点选打开条目详情页 (表番的"打开"是看详情, 与里番直连播放不同)
+  Future<void> _showRandomPick() async {
+    await showAdultRandomPickSheet(
+      context,
+      collectController: collectController,
+      historyController: inject<HistoryController>(),
+      onPlay: (item) {
+        if (mounted) context.pushNamed('/info/', arguments: item);
+      },
+      section: 0,
+    );
   }
 
   Future<void> _changeType(BangumiItem item, CollectType type) async {
@@ -119,6 +139,12 @@ class _CollectPageState extends State<CollectPage> with KazumiDialogOwner {
               ?.copyWith(fontWeight: FontWeight.w700),
         ),
         actions: [
+          // [my新增] 随机选片 (表番区): 与里番区同款加权轮盘三选一
+          IconButton(
+            tooltip: '随机选片',
+            icon: const Icon(Icons.casino_rounded),
+            onPressed: _showRandomPick,
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: Tooltip(
@@ -131,14 +157,17 @@ class _CollectPageState extends State<CollectPage> with KazumiDialogOwner {
               ),
             ),
           ),
-        ],
+       ],
       ),
       body: SafeArea(
         top: false,
         bottom: false,
         child: Observer(
           builder: (context) => CollectLibraryView(
-            entries: collectController.collectibles.toList(),
+            // [my修改] section 过滤上移到页面层: 追番 (表番) 只喂 section!=1
+            entries: collectController.collectibles
+                .where((c) => c.section != 1)
+                .toList(),
             showRating: GStorage.getSetting(SettingsKeys.showRating),
             layout: _layout,
             onLayoutChanged: _changeLayout,

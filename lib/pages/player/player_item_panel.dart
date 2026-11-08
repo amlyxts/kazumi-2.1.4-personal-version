@@ -587,6 +587,22 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
         onSelected: widget.handleSuperResolutionChange,
       );
 
+  // [my新增] 外挂字幕菜单: 主字幕(底)/第二字幕(顶, 双语同显)/清除
+  List<Widget> get _subtitleItems => [
+        KazumiMenuItem(
+          onPressed: () => playerController.pickAndLoadSubtitle(),
+          label: '加载字幕 (底部)',
+        ),
+        KazumiMenuItem(
+          onPressed: () => playerController.pickAndLoadSubtitle(secondary: true),
+          label: '加载第二字幕 (顶部·双语)',
+        ),
+        KazumiMenuItem(
+          onPressed: playerController.clearSubtitles,
+          label: '清除字幕',
+        ),
+      ];
+
   Widget _menuButton(
           {required Widget child,
           required List<Widget> items,
@@ -647,10 +663,9 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
           ] else
             const Spacer(),
         ],
-        if (!kDisableSuperResolution)
+        if (kSupportsSuperResolution)
           _menuButton(
-            child:
-                const Text('超分辨率', style: TextStyle(color: Colors.white)),
+            child: const Text('超分辨率', style: TextStyle(color: Colors.white)),
             items: _superResolutionItems,
           ),
         _menuButton(
@@ -661,6 +676,11 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
               style: const TextStyle(color: Colors.white)),
           items: _speedItems,
         ),
+        if (kSupportsExternalSubtitles)
+          _menuButton(
+            child: const Text('字幕', style: TextStyle(color: Colors.white)),
+            items: _subtitleItems,
+          ),
         _menuButton(
           child: const Icon(Icons.aspect_ratio_rounded, color: Colors.white),
           tooltip: '视频比例',
@@ -847,20 +867,37 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                   );
                 },
                 menuChildren: [
-                  if (compact) ...[
+                  if (compact && kSupportsExternalSubtitles) ...[
+                    SubmenuButton(
+                        menuChildren: _subtitleItems,
+                        child: const Text('字幕')),
                     SubmenuButton(
                         menuChildren: _aspectRatioItems,
                         child: const Text('视频比例')),
                     SubmenuButton(
                         menuChildren: _speedItems, child: const Text('倍速')),
-                    SubmenuButton(
-                        menuChildren: _superResolutionItems,
-                        child: const Text('超分辨率')),
+                    if (kSupportsSuperResolution)
+                      SubmenuButton(
+                          menuChildren: _superResolutionItems,
+                          child: const Text('超分辨率')),
                     _syncPlayMenuItem,
                   ],
                   KazumiMenuItem(
                     onPressed: widget.showDanmakuSwitch,
                     label: '弹幕切换',
+                  ),
+                  // [my新增] 自动跳过片头片尾快速开关 (持久化, 设置页同款)
+                  KazumiMenuItem(
+                    onPressed: () {
+                      final next = !playerController.playback.autoSkipOpEd;
+                      playerController.playback.setAutoSkipOpEd(next);
+                      KazumiDialog.showToast(
+                          message: next
+                              ? '已开启自动跳过片头片尾'
+                              : '已关闭自动跳过片头片尾');
+                    },
+                    label: '自动跳过片头片尾',
+                    selected: playerController.playback.autoSkipOpEd,
                   ),
                   if (compact) _danmakuSettingsMenuItem,
                   KazumiMenuItem(

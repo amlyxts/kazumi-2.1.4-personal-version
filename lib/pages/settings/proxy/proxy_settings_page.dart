@@ -8,6 +8,7 @@ import 'package:kazumi/bean/settings/settings_list.dart';
 import 'package:kazumi/pages/settings/proxy/ocr_channel_editor.dart';
 import 'package:kazumi/pages/settings/proxy/rule_repo_editor.dart';
 import 'package:kazumi/request/apis/plugin_catalog_api.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/services/network/proxy_manager.dart';
 import 'package:kazumi/services/plugin/captcha_ocr_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -42,6 +43,42 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
   Future<void> _manageRuleRepos() async {
     final saved = await showRuleRepoManager(context);
     if (saved && mounted) setState(() {});
+  }
+
+  // [my修改] FlareSolverr 配置输入
+  Future<void> _editFlareSolverrField({
+    required String title,
+    required SettingKey<String> settingKey,
+    required String hint,
+  }) async {
+    final controller =
+        TextEditingController(text: GStorage.getSetting(settingKey));
+    await KazumiDialog.show(
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(hintText: hint),
+        ),
+        actions: [
+          TextButton(
+            onPressed: KazumiDialog.dismiss,
+            child: Text('取消',
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.outline)),
+          ),
+          TextButton(
+            onPressed: () {
+              GStorage.putSetting(settingKey, controller.text.trim());
+              KazumiDialog.dismiss();
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (mounted) setState(() {});
   }
 
   @override
@@ -93,6 +130,81 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                       ? '未配置 (仅官方仓库)'
                       : '已配置 $count 个 (插件市场顶部切换)';
                 }()),
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: const Text('追加代理白名单'),
+            tiles: [
+              SettingsTile(
+                leading: Icons.playlist_add_rounded,
+                onPressed: (_) => _editFlareSolverrField(
+                  title: '追加代理白名单',
+                  settingKey: SettingsKeys.proxyWhitelistExtra,
+                  hint: '域名1,域名2 (逗号分隔, 留空关闭)',
+                ),
+                title: const Text('追加白名单域名'),
+                description: Text(() {
+                  final v = GStorage.getSetting(
+                      SettingsKeys.proxyWhitelistExtra);
+                  return v.isEmpty
+                      ? '未配置 (被墙规则源的站名走此处配置, 不写入代码)'
+                      : '已配置: $v';
+                }()),
+              ),
+            ],
+          ),
+          // [my修改] 源直连浏览站点配置仅非 iOS 平台显示 (iOS 无源搜索功能)
+          if (kSupportsR18Tabs)
+            SettingsSection(
+              title: const Text('源直连浏览站点'),
+              tiles: [
+                SettingsTile(
+                  leading: Icons.travel_explore_rounded,
+                  onPressed: (_) => _editFlareSolverrField(
+                    title: '源直连浏览站点',
+                    settingKey: SettingsKeys.directSearchSite,
+                    hint: 'https://<站点首页>',
+                  ),
+                  title: const Text('浏览站点首页'),
+                  description: Text(() {
+                    final v = GStorage.getSetting(
+                        SettingsKeys.directSearchSite);
+                    return v.isEmpty ? '未配置 (源直连浏览功能关闭)' : v;
+                  }()),
+                ),
+              ],
+            ),
+          // [my修复] FlareSolverr 是源直连专用工具, iOS 包不出现 (用户铁律:
+          // iOS 为纯表番观看端, 源直连/里番相关内容一律不出现)
+          if (kSupportsR18Tabs)
+            SettingsSection(
+              title: const Text('FlareSolverr (CF 挑战求解)'),
+              tiles: [
+              SettingsTile(
+                leading: Icons.local_fire_department_rounded,
+                onPressed: (_) => _editFlareSolverrField(
+                  title: 'FlareSolverr 地址',
+                  settingKey: SettingsKeys.flareSolverrUrl,
+                  hint: 'http://127.0.0.1:8191',
+                ),
+                title: const Text('服务地址'),
+                description: Text(() {
+                  final v = GStorage.getSetting(
+                      SettingsKeys.flareSolverrUrl);
+                  return v.isEmpty ? '未配置 (功能关闭)' : v;
+                }()),
+              ),
+              SettingsTile(
+                leading: Icons.alt_route_rounded,
+                onPressed: (_) => _editFlareSolverrField(
+                  title: 'FlareSolverr 出口代理',
+                  settingKey: SettingsKeys.flareSolverrProxy,
+                  hint: 'http://host.docker.internal:7897',
+                ),
+                title: const Text('出口代理 (建议配置)'),
+                description: const Text(
+                    '让 FlareSolverr 的无头浏览器与应用走同一代理出口, 否则求解的凭证因 IP 不匹配无效'),
               ),
             ],
           ),

@@ -142,19 +142,35 @@ const List<String> mpvAnime4KShaders = [
 ];
 
 /// 超分辨率滤镜 (轻量)
+/// [my修复] 对齐官方 Mode B 完整链 (Clamp → Restore_Soft_M → Upscale_M →
+/// AutoDown×2 → Upscale_M): 原组合 (Restore_M+Restore_S 连跑 + M/S 混插)
+/// 非官方配方, 双重修复过度平滑致线稿发糊
 const List<String> mpvAnime4KShadersLite = [
   'Anime4K_Clamp_Highlights.glsl',
-  'Anime4K_Restore_CNN_M.glsl',
-  'Anime4K_Restore_CNN_S.glsl',
+  'Anime4K_Restore_CNN_Soft_M.glsl',
   'Anime4K_Upscale_CNN_x2_M.glsl',
   'Anime4K_AutoDownscalePre_x2.glsl',
   'Anime4K_AutoDownscalePre_x4.glsl',
-  'Anime4K_Upscale_CNN_x2_S.glsl'
+  'Anime4K_Upscale_CNN_x2_M.glsl'
 ];
 
 /// FSRCNNX 实拍超分着色器
 const List<String> mpvFSRCNNXShadersLite = ['FSRCNNX_x2_8_0_4_1.glsl'];
 const List<String> mpvFSRCNNXShaders = ['FSRCNNX_x2_16_0_4_1.glsl'];
+
+// [my修改] ArtCNN: 专为动漫线稿训练的 CNN 超分 (2024+ 社区新秀, 线稿干净度
+// 超过 Anime4K v4 / FSRCNNX), x2 放大后由 mpv 缩放至屏幕分辨率。
+// C4F32 = 高精度权重档, 建议 GTX 1660 / RX 6600 级以上, 1080p 输出中档卡即可流畅。
+const List<String> mpvArtCNNShaders = ['ArtCNN_C4F32.glsl'];
+
+/// [my修改] 画质增强三件套 (agyild/Shiandow 系): KrigBilateral 色度升采样 +
+/// SSimSuperRes 感知超分 (比 FSRCNNX 少振铃) + SSimDownscaler 高质量降采样。
+/// 组合对老番/颗粒源友好, 均为 hook 型着色器, 中档 GPU 可流畅运行。
+const List<String> mpvEnhanceShaders = [
+  'KrigBilateral.glsl',
+  'SSimSuperRes.glsl',
+  'SSimDownscaler.glsl',
+];
 
 // [my修改] 本地视频体系仅桌面端可用，iOS/Android 移动端不提供该功能
 final bool kSupportsLocalVideo = !(Platform.isAndroid || Platform.isIOS);
@@ -171,6 +187,19 @@ final bool kDisableCaptchaOcr = Platform.isIOS;
 // [my修改] 去色带 deband 在 iOS 上禁用 (开关随超分设置页一并隐藏, 此门控
 // 防存量配置在启动时生效), 低清片源色带交给源站画质本身。
 final bool kDisablePlayerDeband = Platform.isIOS;
+
+/// [my修改] R18 相关页签 (源直连搜索 / 里番收藏) 不加入 iOS 构建 —
+/// iOS 定位为纯表番观看端 (数据不受影响: 里番收藏经 WebDAV 同步在库,
+/// 只是不展示页签; 追番视图本就过滤 section=1)。
+final bool kSupportsR18Tabs = !Platform.isIOS;
+
+/// [my修改] 播放器外挂字幕/双语同显菜单仅非 iOS 平台 — 字幕功能服务于
+/// 本地文件日语学习场景 (kitsunekko 日字), iOS 端不提供入口。
+final bool kSupportsExternalSubtitles = !Platform.isIOS;
+
+/// [my修改] 超分档位仅非 iOS — mpv 着色器在 iOS Metal 后端实测卡顿
+/// (且多数档位静默不生效), iOS 锁定关闭避免选了白费电。
+final bool kSupportsSuperResolution = !Platform.isIOS;
 
 // [my修改] 本地视频在历史记录中使用的虚拟插件名（adapterName），
 // 非空才能让 canRecord 为 true、进度得以持久化。

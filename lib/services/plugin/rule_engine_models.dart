@@ -68,6 +68,8 @@ class RuleExecutionConfig {
     required this.searchApiConfig,
     required this.chapterApiConfig,
     required this.antiCrawlerConfig,
+    this.webviewFetch = false,
+    this.strictSearchMatch = false,
   });
 
   final String pluginName;
@@ -84,6 +86,14 @@ class RuleExecutionConfig {
   final ApiSearchConfig searchApiConfig;
   final ApiChapterConfig chapterApiConfig;
   final AntiCrawlerConfig antiCrawlerConfig;
+
+  /// [my新增] 规则声明取页走「挑战回退」链: 直连命中挑战 (CF/雷池/JS 壳) 时
+  /// 改用隐藏 WebView 取页, 失败再兜底 FlareSolverr。默认 false, 行为不变。
+  final bool webviewFetch;
+
+  /// [my新增] 搜索结果严格匹配: 模糊搜索站 (如 xigua 无结果时灌推荐位) 的
+  /// 噪声治理 — 只保留标题含关键词的条目; 过滤后为空则回退全量 (永不更差)。
+  final bool strictSearchMatch;
 }
 
 class PreparedRuleRequest {

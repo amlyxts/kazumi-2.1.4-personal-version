@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:kazumi/bean/widget/empty_state_widget.dart';
 import 'package:kazumi/bean/widget/state_presentation.dart';
 import 'package:kazumi/modules/history/history_module.dart';
+import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/pages/history/history_list_query.dart';
 
 class HistoryListView extends StatefulWidget {
@@ -152,7 +153,11 @@ class _HistoryListViewState extends State<HistoryListView> {
                             runSpacing: 8,
                             children: [
                               for (final source in HistorySourceFilter.values)
-                                _filter(source),
+                                // [my新增] 直连档筛签: iOS 不显示 (强制恒隐藏),
+                                // 其他平台跟随"隐藏直连历史"开关
+                                if (source != HistorySourceFilter.direct ||
+                                    (kSupportsR18Tabs && !kHideDirectHistory))
+                                  _filter(source),
                             ],
                           ),
                           const SizedBox(height: 20),

@@ -13,7 +13,9 @@ import 'package:kazumi/pages/player/syncplay_sheet.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
+import 'package:kazumi/services/skip/skip_time_service.dart';
 import 'package:kazumi/services/sync/webdav.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:flutter/gestures.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
 import 'package:flutter/material.dart';
@@ -77,6 +79,22 @@ class _PlayerItemState extends State<PlayerItem>
   late final PlayerController playerController;
   late final VideoPageController videoPageController =
       widget.videoPageController;
+
+  // [my新增] 自动跳过片头片尾: 切集复位的首跳提示 + 集号跟踪
+  int? _autoSkipEpisode;
+  // [my新增] 跳过操作条 (方案B两步式: 撤销 → 拉黑) 状态
+  bool _skipChipVisible = false;
+  bool _skipChipMorphed = false;
+  Timer? _skipChipTimer;
+  double _skipChipPrePosMs = 0;
+  double _skipChipStartSec = 0;
+  double _skipChipEndSec = 0;
+  String _skipChipSkipId = '';
+  String _skipChipTypeLabel = '';
+  int _skipChipMalId = 0;
+  int _skipChipEpisode = 0;
+  String _skipChipSeriesName = '';
+  bool _autoSkipNoDataLogged = false;
   final HistoryController historyController = inject<HistoryController>();
   final MyController myController = inject<MyController>();
   AudioController get _audioController => playerController.audioController;
@@ -590,6 +608,174 @@ class _PlayerItemState extends State<PlayerItem>
     unawaited(_updateAndroidPIPActions(force: true));
   }
 
+  /// [my新增] 自动跳过片头片尾判定 (1s 计时器 tick 调用, 全程静默):
+  /// 社区数据 (aniskip, 懒取+会话缓存) 优先; 无数据回退手动秒数设置。
+  /// 守卫: 总开关关 / 用户拖动中 / Syncplay 会话 / 时长未就绪 / 集号缺失
+  /// 均不跳。区间合法性 end ≤ 时长×1.2 (数据异常丢弃)。
+  Future<void> _autoSkipTick() async {
+    try {
+      if (!playerController.playback.autoSkipOpEd) return;
+      if (_progressBarDragHold != null) return; // 用户拖动进度条中
+      if (playerController.syncplay.hasSession) return; // 会钟打架
+      final playback = playerController.playback;
+      final durationSec = playback.duration.inSeconds;
+      if (durationSec <= 0) return;
+      final posMs = playback.currentPosition.inMilliseconds;
+      final episode = videoPageController.playbackEpisode.episode;
+      if (episode != _autoSkipEpisode) {
+        _autoSkipEpisode = episode;
+        _autoSkipNoDataLogged = false;
+        _skipChipTimer?.cancel();
+        _skipChipVisible = false;
+      }
+      final item = videoPageController.bangumiItem;
+      // [my修复] 用原名 (日文/罗马字) 检索 AniList —— nameCn 中文 AniList
+      // 不索引, 匹配恒失败且负结果不缓存, 表现为"跳过与缓存都不生效"
+      final subjectName = item.name.isNotEmpty ? item.name : item.nameCn;
+
+      // 懒取社区区间 (服务内会话缓存, 稳态零网络)
+      List<SkipInterval>? intervals;
+      // [my修复] id 优先解析链: 下载页缓存播放伪造的条目 name/nameCn 全是
+      // 中文名, 名称路径必失败 —— 真实 bgm id 走 bgm API 取原名再查 AniList;
+      // 直连条目 (info=URL/哈希) 走名称路径 (R18 预期无数据 → 手动回退)
+      final malId = await SkipTimeService.resolveMalIdForSubject(
+        isBgmSubject: !CollectSectionRepair.isDirectSourceItem(item),
+        subjectId: item.id,
+        fallbackName: subjectName,
+        itemTitleCn: item.nameCn,
+      );
+      if (malId != null) {
+        intervals = await SkipTimeService.intervalsFor(
+          malId: malId,
+          episodeNumber: episode,
+          episodeLengthSec: durationSec,
+        );
+      }
+
+      Duration? target;
+      var skipType = '';
+      SkipInterval? fired;
+      if (intervals != null && intervals.isNotEmpty) {
+        for (final it in intervals) {
+          if (it.end > durationSec * 1.2) continue; // 数据异常
+          final startMs = it.start * 1000;
+          final endMs = it.end * 1000;
+          // [my新增] 对称收口: 起点延迟 1s (起点偏早少切) + 落点回退 1s (终点偏晚少切)
+          if (posMs >= startMs + 1000 && posMs < endMs - 1000) {
+            target = Duration(milliseconds: (endMs - 1000).round());
+            skipType = it.type;
+            fired = it;
+            break;
+          }
+        }
+      }
+      // [my修复] 手动秒数回退改为通用兜底: 无社区数据【或区间被时长守卫
+      // 全部丢弃】(片源版本≠社区录制版本, 如悪魔狩り案例) 都接管 —
+      // 此前回退挂在 else 上, 社区区间存在但不适用时手动秒数永不生效。
+      if (target == null) {
+        final opSec =
+            GStorage.getSetting(SettingsKeys.autoSkipOpManualSeconds);
+        if (opSec > 0 && posMs < opSec * 1000) {
+          target = Duration(seconds: opSec);
+          skipType = 'op';
+        } else {
+          final edSec =
+              GStorage.getSetting(SettingsKeys.autoSkipEdManualSeconds);
+          if (edSec > 0 && posMs >= durationSec * 1000 - edSec * 1000) {
+            // 跳到末尾: completed 事件接管 (自动连播开启才进下一集)
+            target = playback.duration;
+            skipType = 'ed';
+          }
+        }
+      }
+      if (target == null) {
+        // [my新增] 一次/集 的诊断日志 (进文件, 便于排查"为什么没跳")
+        if (!_autoSkipNoDataLogged) {
+          _autoSkipNoDataLogged = true;
+          KazumiLogger().w(
+              'SkipTime: 无跳过数据 ep=$episode malId=${malId ?? "未匹配"} '
+              '区间=${intervals?.length ?? 0} '
+              '手动OP=${GStorage.getSetting(SettingsKeys.autoSkipOpManualSeconds)} '
+              '手动ED=${GStorage.getSetting(SettingsKeys.autoSkipEdManualSeconds)}');
+        }
+        return;
+      }
+      await playerController.seek(target);
+      // [my新增] 操作条 (方案B): 撤销跳过 → (变形) 拉黑此标记
+      if (mounted) {
+        _showSkipChip(
+          preSkipPosMs: posMs.toDouble(),
+          startSec: fired?.start ?? 0.0,
+          endSec: fired?.end ?? 0.0,
+          skipId: fired?.skipId ?? '',
+          skipType: skipType,
+          malId: malId ?? 0,
+          episode: episode,
+          seriesName: subjectName,
+        );
+      }
+    } catch (_) {
+      // 判定/取数失败静默 (计时器下一轮重试或放弃)
+    }
+  }
+
+  // —— [my新增] 跳过操作条 ——
+
+  void _showSkipChip(
+      {required double preSkipPosMs,
+      required double startSec,
+      required double endSec,
+      required String skipId,
+      required String skipType,
+      required int malId,
+      required int episode,
+      required String seriesName}) {
+    _skipChipTimer?.cancel();
+    setState(() {
+      _skipChipVisible = true;
+      _skipChipMorphed = false;
+      _skipChipPrePosMs = preSkipPosMs;
+      _skipChipStartSec = startSec;
+      _skipChipEndSec = endSec;
+      _skipChipSkipId = skipId;
+      _skipChipMalId = malId;
+      _skipChipEpisode = episode;
+      _skipChipSeriesName = seriesName;
+      _skipChipTypeLabel = skipType == 'ed' ? 'ED' : 'OP';
+    });
+    _skipChipTimer = Timer(const Duration(seconds: 8), () {
+      if (mounted) setState(() => _skipChipVisible = false);
+    });
+  }
+
+  void _undoSkip() {
+    unawaited(playerController
+        .seek(Duration(milliseconds: _skipChipPrePosMs.round())));
+    _skipChipTimer?.cancel();
+    setState(() => _skipChipMorphed = true);
+    _skipChipTimer = Timer(const Duration(seconds: 8), () {
+      if (mounted) setState(() => _skipChipVisible = false);
+    });
+  }
+
+  void _blacklistSkipChip() {
+    if (_skipChipSkipId.isNotEmpty) {
+      SkipTimeService.blacklistSkip(
+        skipId: _skipChipSkipId,
+        anilistId: _skipChipMalId,
+        episode: _skipChipEpisode,
+        type: _skipChipTypeLabel == 'ED' ? 'ed' : 'op',
+        start: _skipChipStartSec,
+        end: _skipChipEndSec,
+        seriesName: _skipChipSeriesName,
+      );
+    }
+    unawaited(playerController
+        .seek(Duration(milliseconds: _skipChipPrePosMs.round())));
+    _skipChipTimer?.cancel();
+    if (mounted) setState(() => _skipChipVisible = false);
+  }
+
   Future<void> _syncHistoryWithWebDav() async {
     if (webDavEnable && webDavEnableHistory) {
       try {
@@ -696,6 +882,7 @@ class _PlayerItemState extends State<PlayerItem>
     _progressBarDragHold?.release();
     _progressBarDragHold = null;
     playerTimer?.cancel();
+    _skipChipTimer?.cancel();
     playerController.seeking.beginInteractiveSeek();
   }
 
@@ -885,10 +1072,11 @@ class _PlayerItemState extends State<PlayerItem>
       }
     }
 
-    // [my修改] 性能提示扩展到质量档与 FSRCNNX 实拍-质量档
+    // [my修改] 性能提示覆盖重负载档: Anime4K 质量档 / FSRCNNX 质量档 / ArtCNN
     final bool requiresPerformanceWarning =
         mode == SuperResolutionMode.quality ||
-        mode == SuperResolutionMode.fsrcnnxQuality;
+        mode == SuperResolutionMode.fsrcnnxQuality ||
+        mode == SuperResolutionMode.artcnn;
     final bool warningDisabled = GStorage.getSetting(
       SettingsKeys.disableSuperResolutionWarning,
     );
@@ -906,7 +1094,7 @@ class _PlayerItemState extends State<PlayerItem>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('启用超分辨率（质量档）可能会造成设备卡顿，是否继续？'),
+                const Text('启用超分辨率的高负载档位可能会造成设备卡顿，是否继续？'),
                 const SizedBox(height: 12),
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1180,6 +1368,7 @@ class _PlayerItemState extends State<PlayerItem>
   Timer getPlayerTimer() {
     return Timer.periodic(const Duration(seconds: 1), (timer) {
       playerController.syncPlaybackState();
+      unawaited(_autoSkipTick());
       unawaited(_updateAndroidPIPActions());
       _syncAudioServiceState();
       _emitDanmakusForCurrentPosition();
@@ -1245,6 +1434,10 @@ class _PlayerItemState extends State<PlayerItem>
       initialKeyword: videoPageController.title,
       danmakuController: playerController.danmaku,
       onBeforeApply: videoPageController.cancelAutomaticDanmakuLoad,
+      // [my新增] 传当前源集数与插件名, 手动匹配成功即写锚点
+      srcEp: videoPageController
+          .commentEpisodeForSelection(videoPageController.playbackEpisode),
+      pluginName: videoPageController.currentPlugin.name,
     ));
   }
 
@@ -1528,6 +1721,30 @@ class _PlayerItemState extends State<PlayerItem>
                         animation: _screenshotFeedbackAnimation,
                       ),
                     ),
+                    if (_skipChipVisible)
+                      Positioned(
+                        top: 76,
+                        right: 16,
+                        child: Material(
+                          color: Colors.black.withOpacity(0.72),
+                          borderRadius: BorderRadius.circular(10),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(10),
+                            onTap: _skipChipMorphed ? _blacklistSkipChip : _undoSkip,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
+                              child: Text(
+                                _skipChipMorphed
+                                    ? '这个标记有问题？点击拉黑，不再自动跳'
+                                    : '已自动跳过 $_skipChipTypeLabel · 点击撤销',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 13),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     (Platform.isAndroid &&
                             (videoPageController.isPip || _pipEnterRequested))
                         ? const SizedBox.shrink()

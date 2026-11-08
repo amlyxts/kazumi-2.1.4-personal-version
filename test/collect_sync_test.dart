@@ -6,6 +6,7 @@ import 'package:kazumi/modules/bangumi/sync_priority.dart';
 import 'package:kazumi/modules/bangumi/bangumi_tag.dart';
 import 'package:kazumi/modules/collect/collect_change_module.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/modules/collect/collect_sync_merger.dart';
 import 'package:kazumi/modules/collect/collect_sync_plan.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
@@ -216,6 +217,58 @@ void main() {
     });
   });
 
+  group('CollectSectionRepair', () {
+    test('detects direct-source entries by playback URL or hash id', () {
+      expect(
+        CollectSectionRepair.isDirectSourceCollectible(
+          _collect(1, CollectType.watching, 10,
+              info: 'https://example.com/watch?v=abc'),
+        ),
+        isTrue,
+      );
+      expect(
+        CollectSectionRepair.isDirectSourceCollectible(
+          _collect(123456789, CollectType.watching, 10),
+        ),
+        isTrue,
+      );
+      expect(
+        CollectSectionRepair.isDirectSourceCollectible(
+          _collect(12345, CollectType.watching, 10),
+        ),
+        isFalse,
+      );
+    });
+
+    test('flags only direct entries recorded in the main section', () {
+      final misplaced = _collect(1, CollectType.watching, 10,
+          info: 'https://example.com/watch?v=a');
+      final inAdultSection = _collect(2, CollectType.watching, 10,
+          section: 1, info: 'https://example.com/watch?v=b');
+      final normal = _collect(3, CollectType.watching, 10);
+
+      final found = CollectSectionRepair.findMisplacedDirectCollectibles(
+        [misplaced, inAdultSection, normal],
+      );
+
+      expect(found.map((c) => c.bangumiItem.id), [1]);
+    });
+
+    test('excludes direct-source entries from Bangumi upload plans', () {
+      final plan = CollectSyncMerger.planBangumi(
+        localCollectibles: [
+          _collect(1, CollectType.watching, 10),
+          _collect(123456789, CollectType.watching, 20,
+              info: 'https://example.com/watch?v=hash'),
+        ],
+        remoteCollections: const [],
+        priority: BangumiSyncPriority.localFirst,
+      );
+
+      expect(plan.localOnlyUploads.map((upload) => upload.bangumiId), [1]);
+    });
+  });
+
   group('BangumiSyncPriority', () {
     test('fromValue maps correctly including timeFirst and fallback', () {
       expect(BangumiSyncPriority.fromValue(0), BangumiSyncPriority.localFirst);
@@ -351,11 +404,13 @@ void main() {
   });
 }
 
-CollectedBangumi _collect(int id, CollectType type, int timestamp) {
+CollectedBangumi _collect(int id, CollectType type, int timestamp,
+    {int section = 0, String info = ''}) {
   return CollectedBangumi(
-    _item(id),
+    _item(id, info: info),
     DateTime.fromMillisecondsSinceEpoch(timestamp * 1000),
     type.value,
+    section: section,
   );
 }
 
@@ -402,7 +457,7 @@ BangumiCollection _remote(
   );
 }
 
-BangumiItem _item(int id) {
+BangumiItem _item(int id, {String info = ''}) {
   return BangumiItem(
     id: id,
     type: 2,
@@ -424,7 +479,7 @@ BangumiItem _item(int id) {
     ratingScore: 0,
     votes: 0,
     votesCount: const [],
-    info: '',
+    info: info,
   );
 }
 

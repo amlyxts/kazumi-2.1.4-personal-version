@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/pages/my/my_controller.dart';
 import 'package:kazumi/services/sync/bangumi_sync_service.dart';
+import 'package:kazumi/services/danmaku/danmaku_alignment_service.dart';
+import 'package:kazumi/services/sync/assets_sync_service.dart';
 import 'package:kazumi/services/sync/danmaku_shield_sync_service.dart';
 import 'package:kazumi/services/sync/webdav.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -57,6 +59,10 @@ class _InitPageState extends State<InitPage> {
 
   Future<void> _initializeApp() async {
     widget.danmakuShieldSync.start();
+    // [my新增] 弹幕对齐表 WebDAV 同步 (锚点跨设备)
+    DanmakuAlignmentService.instance.start();
+    // [my新增] 插件/设置云同步 (重装恢复)
+    AssetsSyncService.instance.start();
     _migrateStorage();
     _loadShaders();
     unawaited(myController.loadShieldList());

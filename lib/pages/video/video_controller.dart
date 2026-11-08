@@ -6,17 +6,20 @@ import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
+import 'package:kazumi/modules/comments/comment_item.dart';
+import 'package:kazumi/services/danmaku/danmaku_alignment_service.dart';
+import 'package:kazumi/services/site_comment/site_comment_service.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/download/download_module.dart';
 import 'package:kazumi/modules/history/history_module.dart';
 import 'package:kazumi/repositories/download_repository.dart';
 import 'package:kazumi/services/download/download_manager.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/video_source/services.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:mobx/mobx.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/modules/bangumi/episode_item.dart';
-import 'package:kazumi/modules/comments/comment_item.dart';
 import 'package:kazumi/modules/comments/comment_response.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -70,6 +73,10 @@ abstract class _VideoPageController with Store implements Disposable {
 
   @observable
   var episodeCommentsList = ObservableList<EpisodeCommentItem>();
+
+  /// [my新增] 当前评论 Tab 的数据来源: false=bgm (表番) / true=源站 (里番)。
+  /// 由 EpisodeCommentsSheet 按 pageUrl 判定并切换。
+  bool commentsFromSite = false;
 
   // Resolution state machine: [_beginEpisodeSwitch] enters the loading state;
   // [_finishLoading] and [_failLoading] are the only terminal transitions.
@@ -639,6 +646,7 @@ abstract class _VideoPageController with Store implements Disposable {
         params.bangumiId,
         params.pluginName,
         params.danmakuEpisodeNumber,
+        itemTitle: params.bangumiName,
       );
       if (session.isActive && danmakuSession.isActive) {
         if (result.hasDanmakus) {
@@ -650,7 +658,13 @@ abstract class _VideoPageController with Store implements Disposable {
           );
         } else {
           playerController.danmaku.applyUnavailableDanmakuLoad(result);
-          if (result.isFailed) {
+          // [my新增] 疑似错配提示 (自动命中 OP/ED 或越界, 不再静默空弹幕)
+          final lastMatch =
+              DanmakuAlignmentService.instance.lastMatch;
+          if (lastMatch != null && lastMatch.source == 'suspect') {
+            KazumiDialog.showToast(
+                message: '弹幕疑似错配 (${lastMatch.note}), 可手动匹配');
+          } else if (result.isFailed) {
             KazumiDialog.showToast(message: '弹幕加载失败，可手动检索');
           }
         }
@@ -691,12 +705,33 @@ abstract class _VideoPageController with Store implements Disposable {
       }
     });
 
+    // [my修改] FlareSolverr 优先: 播放页服务端渲染, 正片直链直取自 HTML,
+    // 规避页面动态广告视频被嗅探误抓 (该站实测正片源唯一, 无广告视频源)。
+    VideoSource? flareSource;
+    if (currentPlugin.resolveViaFlareSolverr) {
+      try {
+        flareSource = await FlareSolverrService.resolveVideo(url,
+            offset: offset);
+        if (flareSource != null && session.isStale) return;
+        if (flareSource != null) {
+          _finishLoading();
+          KazumiLogger().i(
+              'VideoPageController: resolved via FlareSolverr: ${flareSource.url}');
+        }
+      } catch (error) {
+        KazumiLogger().w(
+            'VideoPageController: FlareSolverr resolve failed, falling back to sniffing',
+            error: error);
+      }
+    }
+
     try {
-      final source = await _videoSourceService!.resolve(
-        url,
-        useLegacyParser: currentPlugin.useLegacyParser,
-        offset: offset,
-      );
+      final source = flareSource ??
+          await _videoSourceService!.resolve(
+            url,
+            useLegacyParser: currentPlugin.useLegacyParser,
+            offset: offset,
+          );
 
       if (session.isStale) {
         return;
@@ -765,6 +800,47 @@ abstract class _VideoPageController with Store implements Disposable {
     _commentSessions.cancel();
     episodeInfo.reset();
     episodeCommentsList.clear();
+  }
+
+  /// [my新增] 里番源站评论加载: pageUrl 提取 videoId → loadComment 端点
+  /// → 映射 EpisodeCommentItem (replies 空, 点赞带在 comment 里)。
+  /// 成功后 commentsFromSite=true; 失败返回 false (sheet 显示错误态)。
+  Future<bool> querySiteEpisodeComments(String pageUrl) async {
+    final session = _commentSessions.begin();
+    final videoId = SiteCommentService.videoIdFromUrl(pageUrl);
+    if (videoId == null) return false;
+    try {
+      final items = await SiteCommentService.instance.loadComments(pageUrl);
+      if (session.isStale) return false;
+      commentsFromSite = true;
+      episodeCommentsList = ObservableList.of([
+        for (final item in items.indexed)
+          EpisodeCommentItem(
+            comment: EpisodeComment(
+              // 字段映射: 复用 bgm 评论的展示模型。user.id 负值占位
+              // (避免与 bgm 用户 id 空间冲突); createdAt 用序号
+              // (保持源站原顺序)
+              user: User(
+                id: -(item.$1 + 1),
+                username: item.$2.user,
+                nickname: item.$2.user,
+                avatar: UserAvatar(small: '', medium: '', large: ''),
+                sign: '',
+                joinedAt: 0,
+              ),
+              comment: item.$2.content,
+              createdAt: items.length - item.$1,
+            ),
+            replies: const [],
+          ),
+      ]);
+      KazumiLogger().i(
+          'VideoPageController: site comments loaded ${items.length}');
+      return true;
+    } catch (e) {
+      KazumiLogger().w('VideoPageController: site comments failed', error: e);
+      return false;
+    }
   }
 
   Future<bool> queryBangumiEpisodeCommentsByID(int id, int episode) async {

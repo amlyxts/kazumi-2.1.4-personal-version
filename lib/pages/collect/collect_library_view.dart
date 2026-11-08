@@ -1,5 +1,10 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:kazumi/bean/card/network_img_layer.dart';
 import 'package:kazumi/bean/widget/empty_state_widget.dart';
 import 'package:kazumi/bean/widget/kazumi_menu.dart';
@@ -8,9 +13,13 @@ import 'package:kazumi/modules/collect/collect_layout.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/pages/collect/collect_library_query.dart';
+import 'package:kazumi/pages/direct_search/series_detector.dart';
+import 'package:kazumi/services/storage/storage.dart';
+import 'package:waterfall_flow/waterfall_flow.dart';
 
 part 'collect_library_card.dart';
 part 'collect_library_controls.dart';
+part 'collect_cover_ratio.dart';
 
 const _collectCategories = <CollectType?>[
   null,
@@ -31,6 +40,8 @@ class CollectLibraryView extends StatefulWidget {
     required this.canEdit,
     required this.layout,
     required this.onLayoutChanged,
+    this.isAdultSection = false,
+    this.onMoveToMain,
   });
 
   final List<CollectedBangumi> entries;
@@ -40,6 +51,12 @@ class CollectLibraryView extends StatefulWidget {
   final bool Function(BangumiItem) canEdit;
   final CollectLayout layout;
   final ValueChanged<CollectLayout> onLayoutChanged;
+
+  /// [my新增] 里番区标记: 卡片菜单显示"移回追番"而非仅取消收藏
+  final bool isAdultSection;
+
+  /// [my新增] 移回表番区回调 (isAdultSection 时使用)
+  final void Function(BangumiItem)? onMoveToMain;
 
   @override
   State<CollectLibraryView> createState() => _CollectLibraryViewState();
@@ -336,9 +353,13 @@ class _CollectLibraryViewState extends State<CollectLibraryView>
               SliverPadding(
                 padding: EdgeInsets.fromLTRB(
                     inset, 0, inset, 24 + MediaQuery.paddingOf(context).bottom),
-                sliver: widget.layout == CollectLayout.cards
-                    ? _grid(entries, contentWidth, type: type)
-                    : _list(entries, contentWidth),
+                sliver: switch (widget.layout) {
+                  CollectLayout.cards =>
+                    _grid(entries, contentWidth, type: type),
+                  CollectLayout.waterfall =>
+                    _waterfall(entries, contentWidth, type: type),
+                  _ => _list(entries, contentWidth),
+                },
               ),
           ],
         ),
@@ -366,6 +387,8 @@ class _CollectLibraryViewState extends State<CollectLibraryView>
             showRating: widget.showRating,
             onOpen: () => widget.onOpen(entries[index].bangumiItem),
             onChangeType: _changeTypeFor(entries[index]),
+            isAdultSection: widget.isAdultSection,
+            onMoveToMain: widget.onMoveToMain,
           ),
         );
 
@@ -430,6 +453,44 @@ class _CollectLibraryViewState extends State<CollectLibraryView>
         showStatus: type == null,
         onOpen: () => widget.onOpen(entries[index].bangumiItem),
         onChangeType: _changeTypeFor(entries[index]),
+        isAdultSection: widget.isAdultSection,
+        onMoveToMain: widget.onMoveToMain,
+      ),
+    );
+  }
+
+  /// [my新增 v2] 瀑布流档: SliverWaterfallFlow (惰性 sliver, 列数/间距
+  /// 算法与 _grid 同源); 卡片走 naturalHeight 自撑高度, 封面按自然比例。
+  Widget _waterfall(List<CollectedBangumi> entries, double contentWidth,
+      {required CollectType? type}) {
+    final portrait = MediaQuery.orientationOf(context) == Orientation.portrait;
+    final spacing = portrait ? (contentWidth < 600 ? 8.0 : 12.0) : 16.0;
+    final scaler = MediaQuery.textScalerOf(context);
+    final textScale = (scaler.scale(14) / 14).clamp(1.0, double.infinity);
+    final minWidth =
+        (contentWidth < 600 ? 136.0 : 172.0) + 32 * (textScale - 1);
+    final columns = portrait
+        ? 3
+        : ((contentWidth + spacing) / (minWidth + spacing)).floor().clamp(1, 6);
+    return SliverWaterfallFlow(
+      gridDelegate: SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        crossAxisSpacing: spacing,
+        mainAxisSpacing: portrait ? 12 : spacing,
+      ),
+      delegate: SliverChildBuilderDelegate(
+        (context, index) => _CollectPosterCard(
+          key: ValueKey('collect-${entries[index].bangumiItem.id}'),
+          entry: entries[index],
+          showRating: widget.showRating,
+          showStatus: type == null,
+          naturalHeight: true,
+          onOpen: () => widget.onOpen(entries[index].bangumiItem),
+          onChangeType: _changeTypeFor(entries[index]),
+          isAdultSection: widget.isAdultSection,
+          onMoveToMain: widget.onMoveToMain,
+        ),
+        childCount: entries.length,
       ),
     );
   }

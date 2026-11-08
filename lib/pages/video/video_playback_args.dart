@@ -19,12 +19,19 @@ class OnlineVideoPlaybackArgs extends VideoPlaybackArgs {
     required this.title,
     required this.src,
     required this.roads,
+    this.startEpisode,
+    this.startRoad = 0,
   });
 
   final Plugin plugin;
   final String title;
   final String src;
   final List<Road> roads;
+
+  /// [my新增] 无历史时的起始集 (1-based, [startRoad] 内索引)。
+  /// 有历史时播放页按历史恢复上次集数, 此字段被忽略。
+  final int? startEpisode;
+  final int startRoad;
 }
 
 class OfflineVideoPlaybackArgs extends VideoPlaybackArgs {

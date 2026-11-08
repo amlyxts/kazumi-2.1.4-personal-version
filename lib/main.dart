@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:kazumi/app_module.dart';
@@ -7,6 +8,7 @@ import 'package:kazumi/bean/settings/theme_provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/download/download_directory_service.dart';
+import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:hive_ce_flutter/hive_flutter.dart';
 import 'package:kazumi/services/network/metered_network_service.dart';
 import 'package:kazumi/services/network/ech_http_licenses.dart';
@@ -23,6 +25,7 @@ import 'package:kazumi/services/platform/webview_feature_service.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/navigation.dart';
 import 'package:kazumi/utils/qa_driver.dart';
+import 'package:kazumi/utils/qa_local_driver.dart';
 
 // [my修改] 支持命令行参数 (--qa-play 无头画质测试驱动)
 void main(List<String> args) async {
@@ -30,6 +33,11 @@ void main(List<String> args) async {
   // [my修改] 路线②画质测试驱动: --qa-play 无头模式 (规则→搜索→取集→嗅探直链→JSON→退出), 不进主界面
   if (args.contains('--qa-play')) {
     await runQaDriver(args);
+    return;
+  }
+  // [my修改] R1 外挂字幕验证驱动: --qa-local <视频路径> (两阶段实测外挂字幕加载)
+  if (args.contains('--qa-local')) {
+    await runQaLocalDriver(args);
     return;
   }
   registerEchHttpLicenses();
@@ -77,6 +85,10 @@ void main(List<String> args) async {
     return;
   }
   await DownloadDirectoryService().restoreAccess();
+  // [my提速] 启动即预热 CF 过盾 cookies (原延迟 5s): fire-and-forget
+  // 不阻塞启动; FS 持久会话在此创建。源直连页在预热未完成且无页面
+  // 缓存时会等待其完成 (warmupFuture)。
+  unawaited(FlareSolverrService.warmupDirectSearch());
   final showWindowButton = DesktopWindowConfig.showWindowButton;
   if (isDesktop()) {
     await windowManager.ensureInitialized();

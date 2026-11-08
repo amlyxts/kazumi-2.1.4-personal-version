@@ -56,3 +56,6 @@ android/build/reports/problems/
 **/ios/Podfile.lock
 **/macos/Podfile.lock
 HANDOVER.md
+
+# ZCode local workspace config
+.zcode/

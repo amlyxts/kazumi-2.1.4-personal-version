@@ -17,6 +17,7 @@ import 'package:kazumi/modules/danmaku/danmaku_episode_response.dart';
 import 'package:kazumi/modules/danmaku/danmaku_search_response.dart';
 import 'package:kazumi/pages/player/controller/player_danmaku_controller.dart';
 import 'package:kazumi/request/apis/danmaku_api.dart';
+import 'package:kazumi/services/danmaku/danmaku_alignment_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
@@ -30,12 +31,16 @@ Future<void> showDanmakuSourceSheet(
   required String initialKeyword,
   required PlayerDanmakuController danmakuController,
   required VoidCallback onBeforeApply,
+  int? srcEp,
+  String? pluginName,
 }) async {
   Widget buildSheet(BuildContext _) => _DanmakuSourceSheet(
         bangumiId: bangumiId,
         initialKeyword: initialKeyword,
         danmakuController: danmakuController,
         onBeforeApply: onBeforeApply,
+        srcEp: srcEp,
+        pluginName: pluginName,
       );
 
   if (MediaQuery.orientationOf(context) == Orientation.portrait) {
@@ -84,12 +89,19 @@ class _DanmakuSourceSheet extends StatefulWidget {
     required this.initialKeyword,
     required this.danmakuController,
     required this.onBeforeApply,
+    this.srcEp,
+    this.pluginName,
   });
 
   final int bangumiId;
   final String initialKeyword;
   final PlayerDanmakuController danmakuController;
   final VoidCallback onBeforeApply;
+
+  /// [my新增] 当前源集数与插件名 — 手动匹配成功即写锚点 (本集永久生效,
+  /// 且作为推断锚点惠及邻集)
+  final int? srcEp;
+  final String? pluginName;
 
   @override
   State<_DanmakuSourceSheet> createState() => _DanmakuSourceSheetState();
@@ -108,6 +120,8 @@ class _DanmakuSourceSheetState extends State<_DanmakuSourceSheet> {
   _SourceStep _step = _SourceStep.search;
   List<DanmakuSearchAnime> _animes = const [];
   List<DanmakuEpisode> _episodes = const [];
+  // [my新增] 分集列表默认隐藏非正片 (OP/ED/C 曲目), 可展开
+  bool _showAllEpisodes = false;
   String? _animeTitle;
   int? _segmentStart;
   String? _error;
@@ -162,7 +176,10 @@ class _DanmakuSourceSheetState extends State<_DanmakuSourceSheet> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _animes = response.animes;
+        // [my新增] 与当前条目名相似度排序: "古见同学"搜索混入的
+        // "SSSS.古立特/古连泰沙U"类噪音沉底, 最像的排前
+        _animes = DanmakuAlignmentService.sortAnimesBySimilarity(
+            response.animes, widget.initialKeyword);
         _hasMore = response.hasMore;
         if (response.animes.isEmpty) _error = '未找到番剧';
       });
@@ -214,9 +231,29 @@ class _DanmakuSourceSheetState extends State<_DanmakuSourceSheet> {
           .getDanDanmakuByEpisodeID(episode.episodeId);
       if (!mounted) return;
       widget.danmakuController.setDanmakuEnabled(hasDanmakus);
+      // [my新增] 手动匹配写锚点: 源集 → episodeId (本集永久生效 + 推断锚点)
+      var anchored = false;
+      final srcEp = widget.srcEp;
+      final plugin = widget.pluginName;
+      if (srcEp != null && plugin != null && plugin.isNotEmpty) {
+        await DanmakuAlignmentService.instance.writeAnchor(
+            widget.bangumiId, plugin, srcEp,
+            episode.episodeId, episode.episodeTitle);
+        DanmakuAlignmentService.instance.lastMatch = DanmakuMatchInfo(
+          source: 'manual',
+          bgmId: widget.bangumiId,
+          pluginName: plugin,
+          srcEp: srcEp,
+          episodeId: episode.episodeId,
+          episodeTitle: episode.episodeTitle,
+        );
+        anchored = true;
+      }
       KazumiDialog.dismiss(context: context);
       KazumiDialog.showToast(
-        message: hasDanmakus ? '已切换弹幕源' : '暂无弹幕',
+        message: hasDanmakus
+            ? (anchored ? '已切换弹幕源 · 已记住本集匹配' : '已切换弹幕源')
+            : (anchored ? '暂无弹幕 · 已记住本集匹配' : '暂无弹幕'),
       );
     } catch (_) {
       if (!mounted) return;
@@ -231,6 +268,11 @@ class _DanmakuSourceSheetState extends State<_DanmakuSourceSheet> {
     for (var index = 0; index < _episodes.length; index++) {
       final number = index + 1;
       final episode = _episodes[index];
+      if (!_showAllEpisodes &&
+          DanmakuAlignmentService.isNonEpisodeTitle(
+              episode.episodeTitle)) {
+        continue;
+      }
       if (filter.isNotEmpty &&
           !episode.episodeTitle.toLowerCase().contains(filter) &&
           !number.toString().contains(filter)) {
@@ -512,10 +554,34 @@ class _DanmakuSourceSheetState extends State<_DanmakuSourceSheet> {
       );
     }
     final visible = _visibleEpisodes;
+    final hiddenCount = _episodes.length -
+        _episodes
+            .where((e) =>
+                !DanmakuAlignmentService.isNonEpisodeTitle(e.episodeTitle))
+            .length;
     final showTools = _episodes.length > _episodeToolThreshold;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (hiddenCount > 0)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: GestureDetector(
+                onTap: () =>
+                    setState(() => _showAllEpisodes = !_showAllEpisodes),
+                child: Text(
+                  _showAllEpisodes
+                      ? '隐藏非正片条目'
+                      : '已隐藏 $hiddenCount 条非正片 (OP/ED), 点击显示',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.primary),
+                ),
+              ),
+            ),
+          ),
         if (showTools)
           _EpisodeToolbar(
             total: _episodes.length,

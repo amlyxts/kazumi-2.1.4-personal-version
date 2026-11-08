@@ -21,6 +21,7 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
   final _directoryService = DownloadDirectoryService();
   late int parallelEpisodes;
   late int parallelSegments;
+  late int directConnections;
   late bool downloadDanmaku;
   String downloadDirectory = '';
   String defaultDownloadDirectory = '';
@@ -33,6 +34,8 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
         GStorage.getSetting(SettingsKeys.downloadParallelEpisodes);
     parallelSegments =
         GStorage.getSetting(SettingsKeys.downloadParallelSegments);
+    directConnections =
+        GStorage.getSetting(SettingsKeys.downloadDirectConnections);
     downloadDanmaku = GStorage.getSetting(SettingsKeys.downloadDanmaku);
     downloadDirectory = _directoryService.customDirectory;
     _loadDefaultDownloadDirectory();
@@ -126,6 +129,23 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
                   );
                 },
               ),
+              SettingsSliderTile(
+                leading: Icons.swap_horiz_rounded,
+                title: Text('直链并行连接数'),
+                description: Text('单文件直链视频切多段并行下载 (实测 4 连接约 2 倍速)'),
+                value: directConnections.toDouble(),
+                min: 1,
+                max: 8,
+                divisions: 7,
+                valueLabel: directConnections <= 1 ? '关闭' : '$directConnections 连接',
+                onChanged: (value) {
+                  setState(() => directConnections = value.toInt());
+                  GStorage.putSetting(
+                    SettingsKeys.downloadDirectConnections,
+                    directConnections,
+                  );
+                },
+              ),
             ],
           ),
           SettingsSection(
@@ -192,6 +212,7 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
                 description: Text(
                   '• 集数并发：同时下载多少集视频\n'
                   '• 分片并发：每集内同时下载多少个视频片段\n'
+                  '• 直链并行：单文件直链切多段同时下载，4 为实测甜点位，更高无增益\n'
                   '• 较高的并发可提升速度，但可能被服务器限制\n'
                   '• 修改后对新开始的下载生效',
                 ),

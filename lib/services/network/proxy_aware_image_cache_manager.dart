@@ -51,6 +51,9 @@ class ProxyAwareImageCacheManager extends CacheManager with ImageCacheManager {
 
   static IOClient _createHttpClient() {
     final client = HttpClient();
+    // [my修复·回退白名单直连] 实测: 封面 CDN 直连 TLS 握手 3.3s vs 代理
+    // 0.88s; bangumi 图床直连完全不通。图片必须走代理 (Clash 对国内域自动
+    // 直连, 绕本地一跳损失可忽略), 白名单直连方向相反。
     final proxy = _currentProxy();
     if (proxy != null) {
       client.findProxy = (_) => 'PROXY ${proxy.$1}:${proxy.$2}';
@@ -58,6 +61,8 @@ class ProxyAwareImageCacheManager extends CacheManager with ImageCacheManager {
     } else if (Platform.isWindows) {
       client.findProxy = SystemProxyService.findProxy;
     }
+    // HTTP/1.1 无多路复用: 限每主机连接数, 图墙复用连接而非每张图各付握手
+    client.maxConnectionsPerHost = 8;
     return IOClient(client);
   }
 

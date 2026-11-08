@@ -4,6 +4,7 @@ import 'package:canvas_danmaku/canvas_danmaku.dart' as canvas;
 import 'package:kazumi/modules/danmaku/danmaku_module.dart';
 import 'package:kazumi/pages/download/download_controller.dart';
 import 'package:kazumi/request/apis/danmaku_api.dart';
+import 'package:kazumi/services/danmaku/danmaku_alignment_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:mobx/mobx.dart';
@@ -136,22 +137,30 @@ abstract class _PlayerDanmakuController with Store {
   }
 
   // Apply fetched data only after VideoPageController validates the session.
+  /// [my修改] 单一解析点: 锚点 → 推断 → 自动(+正片校验+顺手转锚点)。
+  /// 见 DanmakuAlignmentService (弹幕匹配探查报告_20261024.md)。
+  /// itemTitle 供跨季推断检索同系列条目。
   Future<DanmakuLoadResult> fetchDanmaku(
     int bangumiId,
     String pluginName,
-    int episode,
-  ) async {
+    int episode, {
+    String? itemTitle,
+  }) async {
     if (isLocalPlayback()) {
-      return await _fetchCachedDanmaku(
-        bangumiId,
-        pluginName,
-        episode,
-      );
+      // 离线: 缓存优先 (缓存键本就是 源集), 未命中走在线解析链并存缓存
+      final cached = await _fetchCachedDanmaku(bangumiId, pluginName, episode);
+      if (cached.hasDanmakus) return cached;
+      final online =
+          await _resolveAlignedOnline(bangumiId, pluginName, episode,
+              itemTitle: itemTitle, cacheTo: (danmakus, dandanId) {
+        _saveDanmakuToCache(
+            downloadController, bangumiId, pluginName, episode, danmakus,
+            dandanId);
+      });
+      return online;
     }
-    return await _fetchDanDanmakuByBgmBangumiID(
-      bangumiId,
-      episode,
-    );
+    return _resolveAlignedOnline(bangumiId, pluginName, episode,
+        itemTitle: itemTitle, cacheTo: null);
   }
 
   @action
@@ -191,7 +200,7 @@ abstract class _PlayerDanmakuController with Store {
   Future<DanmakuLoadResult> _fetchCachedDanmaku(
       int bangumiId, String pluginName, int episode) async {
     KazumiLogger().i(
-        'PlayerController: attempting to load cached danmaku for episode $episode');
+        'PlayerController: attempting to load cached danmaku for episode \$episode');
     var nextBangumiID = bangumiID;
     try {
       final cachedDanmakus = await downloadController.getCachedDanmakus(
@@ -201,42 +210,16 @@ abstract class _PlayerDanmakuController with Store {
       );
 
       if (cachedDanmakus != null && cachedDanmakus.isNotEmpty) {
-        KazumiLogger().i(
-            'PlayerController: loaded ${cachedDanmakus.length} cached danmakus');
+        KazumiLogger()
+            .i('PlayerController: loaded \${cachedDanmakus.length} cached danmakus');
         return DanmakuLoadResult.success(
           danmakus: cachedDanmakus,
           bangumiID: nextBangumiID,
         );
-      } else {
-        KazumiLogger()
-            .i('PlayerController: no cached danmaku, attempting online fetch');
-        try {
-          nextBangumiID =
-              await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bangumiId);
-          if (nextBangumiID != 0) {
-            var res = await DanmakuApi.getDanDanmaku(nextBangumiID, episode);
-            if (res.isNotEmpty) {
-              KazumiLogger()
-                  .i('PlayerController: fetched ${res.length} danmakus online');
-              _saveDanmakuToCache(downloadController, bangumiId, pluginName,
-                  episode, res, nextBangumiID);
-            }
-            return DanmakuLoadResult.success(
-              danmakus: res,
-              bangumiID: nextBangumiID,
-            );
-          }
-        } catch (e) {
-          KazumiLogger().w(
-              'PlayerController: failed to fetch danmaku online (may be offline)',
-              error: e);
-          return DanmakuLoadResult.failed(bangumiID: nextBangumiID);
-        }
       }
     } catch (e) {
       KazumiLogger()
           .w('PlayerController: failed to load cached danmaku', error: e);
-      return DanmakuLoadResult.failed(bangumiID: nextBangumiID);
     }
     return DanmakuLoadResult.success(
       danmakus: const [],
@@ -260,38 +243,36 @@ abstract class _PlayerDanmakuController with Store {
         danDanID,
       );
       KazumiLogger()
-          .i('PlayerController: saved ${danmakus.length} danmakus to cache');
+          .i('PlayerController: saved \${danmakus.length} danmakus to cache');
     } catch (e) {
       KazumiLogger()
           .w('PlayerController: failed to save danmaku to cache', error: e);
     }
   }
 
-  Future<DanmakuLoadResult> _fetchDanDanmakuByBgmBangumiID(
-      int bgmBangumiID, int episode) async {
-    KazumiLogger().i(
-        'PlayerController: attempting to get danmaku [BgmBangumiID] $bgmBangumiID');
-    var nextBangumiID = bangumiID;
-    try {
-      nextBangumiID =
-          await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bgmBangumiID);
-      if (nextBangumiID == 0) {
-        return DanmakuLoadResult.success(
-          danmakus: const [],
-          bangumiID: nextBangumiID,
-        );
-      }
-      var res = await DanmakuApi.getDanDanmaku(nextBangumiID, episode);
-      return DanmakuLoadResult.success(
-        danmakus: res,
-        bangumiID: nextBangumiID,
-      );
-    } catch (e) {
-      KazumiLogger().w(
-          'PlayerController: failed to get danmaku [BgmBangumiID] $bgmBangumiID',
-          error: e);
-    }
-    return DanmakuLoadResult.failed(bangumiID: nextBangumiID);
+  Future<DanmakuLoadResult> _resolveAlignedOnline(
+    int bangumiId,
+    String pluginName,
+    int srcEp, {
+    String? itemTitle,
+    void Function(List<DanmakuEntry> danmakus, int dandanId)? cacheTo,
+  }) async {
+    // [my修改] 委托 DanmakuAlignmentService.resolve (锚点→推断→自动+校验),
+    // 与下载侧缓存弹幕共用同一解析链 — 单一事实源。
+    final (danmakus, match) = await DanmakuAlignmentService.instance.resolve(
+      bgmId: bangumiId,
+      plugin: pluginName,
+      srcEp: srcEp,
+      itemTitle: itemTitle,
+    );
+    final dandanId = match.episodeId != null
+        ? DanmakuAlignmentService.decomposeEpisodeId(match.episodeId!).$1
+        : bangumiID;
+    cacheTo?.call(danmakus, dandanId);
+    return DanmakuLoadResult.success(
+      danmakus: danmakus,
+      bangumiID: dandanId,
+    );
   }
 
   @action

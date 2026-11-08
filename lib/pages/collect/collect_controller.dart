@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/collect/collect_module.dart';
+import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/modules/collect/collect_type.dart';
 import 'package:kazumi/services/sync/bangumi_sync_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -31,13 +32,64 @@ abstract class _CollectController with Store {
   ObservableList<CollectedBangumi> collectibles =
       ObservableList<CollectedBangumi>();
 
+  /// [my优化] 批量挂起刷新: 批量迁移时每条收藏的增删都会触发
+  /// loadCollectibles 全量重建 (add/delete 内部调用), 条目多时是
+  /// N 次列表重建; 批量期间挂起, 结束统一刷一次
+  int _loadSuppressCount = 0;
+
   void loadCollectibles() {
+    if (_loadSuppressCount > 0) return;
     collectibles.clear();
     collectibles.addAll(_collectCrudRepository.getAllCollectibles());
   }
 
+  /// [my优化] 批量操作区间: 区间内的 loadCollectibles 被挂起,
+  /// [action] 结束后强制刷新一次
+  Future<T> suppressLoads<T>(Future<T> Function() action) async {
+    _loadSuppressCount++;
+    try {
+      return await action();
+    } finally {
+      _loadSuppressCount--;
+      if (_loadSuppressCount == 0) loadCollectibles();
+    }
+  }
+
   int getCollectType(BangumiItem bangumiItem) {
     return _collectCrudRepository.getCollectType(bangumiItem.id);
+  }
+
+  /// [my修改] 仅本地收藏 (跳过 Bangumi 同步): 用于无真实 bangumi id 的
+  /// 直连源条目 (本地哈希 id), 同步对不存在条目无意义。
+  @action
+  Future<void> addCollectLocalOnly(BangumiItem bangumiItem,
+      {type = 1, int section = 0}) async {
+    await _collectCrudRepository.addCollectible(bangumiItem, type,
+        section: section);
+    await GStorage.appendCollectChange(
+      bangumiId: bangumiItem.id,
+      action: 1,
+      type: type,
+    );
+    loadCollectibles();
+  }
+
+  /// [my新增] 迁移收藏分区 (0=表番 ⇄ 1=里番), 保留原类型与时间
+  @action
+  Future<void> setCollectSection(int id, int section) async {
+    await _collectCrudRepository.setCollectSection(id, section);
+    loadCollectibles();
+  }
+
+  @action
+  Future<void> deleteCollectLocalOnly(BangumiItem bangumiItem) async {
+    await _collectCrudRepository.deleteCollectible(bangumiItem.id);
+    await GStorage.appendCollectChange(
+      bangumiId: bangumiItem.id,
+      action: 2,
+      type: 0,
+    );
+    loadCollectibles();
   }
 
   @action
@@ -47,14 +99,17 @@ abstract class _CollectController with Store {
       return;
     }
 
-    final bool syncSucceeded = await _syncBangumiCollectIfEnabled(
-      bangumiItem.id,
-      type,
-    );
-    if (!syncSucceeded) {
+    // [my新增] 直连源条目 (info=源站播放页 URL / 哈希 id) 不是 bgm 条目:
+    // 只落本地并固定里番区。历史页的收藏入口此前走本方法, 会把它写成
+    // 表番并触发一次注定 404 的 Bangumi 同步 (脏数据入口之一)。
+    if (CollectSectionRepair.isDirectSourceItem(bangumiItem)) {
+      await addCollectLocalOnly(bangumiItem, type: type, section: 1);
       return;
     }
 
+    // [my修改] 本地优先: 先落本地与变更日志 (WebDAV 增量随日志走), Bangumi
+    // 同步尽力而为 — 失败只提示不回滚 (此前同步失败会取消本次修改, 网络
+    // 抖动时本地也改不动)。未同步的差异由后续手动/自动全量同步收敛。
     final int currentCollectType = getCollectType(bangumiItem);
     final int collectChangeAction = currentCollectType == 0 ? 1 : 2;
 
@@ -65,10 +120,20 @@ abstract class _CollectController with Store {
       type: type,
     );
     loadCollectibles();
+
+    await _syncBangumiCollectIfEnabled(
+      bangumiItem.id,
+      type,
+    );
   }
 
   @action
   Future<void> deleteCollect(BangumiItem bangumiItem) async {
+    // [my新增] 直连源条目不在 Bangumi 上, 直接本地删除, 不弹 bgm 对话框
+    if (CollectSectionRepair.isDirectSourceItem(bangumiItem)) {
+      await _deleteCollectLocally(bangumiItem);
+      return;
+    }
     final action = await _resolveBangumiDeleteSyncAction(bangumiItem);
     switch (action) {
       case _BangumiDeleteSyncAction.markAbandoned:
@@ -171,7 +236,7 @@ abstract class _CollectController with Store {
         KazumiDialog.showToast(message: '已同步到 Bangumi');
         return true;
       } else if (!synced) {
-        KazumiDialog.showToast(message: '同步到 Bangumi 失败，已取消本次状态修改');
+        KazumiDialog.showToast(message: '本地已保存；同步到 Bangumi 失败，稍后同步会自动重试');
         KazumiLogger().w(
           'Bangumi: immediate collect sync did not complete. bangumiId=$bangumiId, type=$localType',
         );
@@ -181,7 +246,7 @@ abstract class _CollectController with Store {
     } catch (e, stackTrace) {
       KazumiDialog.showToast(
           message:
-              '同步到 Bangumi 失败，已取消本次状态修改：${BangumiSyncService.describeError(e)}');
+              '本地已保存；同步到 Bangumi 失败：${BangumiSyncService.describeError(e)}');
       KazumiLogger().e(
         'Bangumi: immediate collect sync failed. bangumiId=$bangumiId, type=$localType',
         error: e,

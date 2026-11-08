@@ -3,6 +3,7 @@ import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/bean/settings/settings_list.dart';
+import 'package:kazumi/utils/constants.dart';
 
 class SuperResolutionSettings extends StatefulWidget {
   const SuperResolutionSettings({super.key});
@@ -15,6 +16,7 @@ class SuperResolutionSettings extends StatefulWidget {
 class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
   late bool disableWarning;
   late bool debandEnable;
+  late bool motionCompensationEnable;
   late SuperResolutionMode superResolutionMode;
 
   @override
@@ -26,9 +28,14 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
     debandEnable = GStorage.getSetting<bool>(
       SettingsKeys.playerDebandEnable,
     );
-    superResolutionMode = SuperResolutionMode.fromStorageValue(
-      GStorage.getSetting<int>(SettingsKeys.defaultSuperResolutionMode),
+    motionCompensationEnable = GStorage.getSetting<bool>(
+      SettingsKeys.playerMotionCompensationEnable,
     );
+    superResolutionMode = kSupportsSuperResolution
+        ? SuperResolutionMode.fromStorageValue(
+            GStorage.getSetting<int>(SettingsKeys.defaultSuperResolutionMode),
+          )
+        : SuperResolutionMode.off;
   }
 
   @override
@@ -40,16 +47,18 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
           SettingsRadioSection<SuperResolutionMode>(
             title: Text('超分辨率需要启用硬件解码, 若启用硬件解码后仍然不生效, 尝试切换视频渲染器为 gpu'),
             groupValue: superResolutionMode,
-            onChanged: (SuperResolutionMode? value) {
-              if (value == null) return;
-              GStorage.putSetting<int>(
-                SettingsKeys.defaultSuperResolutionMode,
-                value.storageValue,
-              );
-              setState(() {
-                superResolutionMode = value;
-              });
-            },
+            onChanged: kSupportsSuperResolution
+                ? (SuperResolutionMode? value) {
+                    if (value == null) return;
+                    GStorage.putSetting<int>(
+                      SettingsKeys.defaultSuperResolutionMode,
+                      value.storageValue,
+                    );
+                    setState(() {
+                      superResolutionMode = value;
+                    });
+                  }
+                : (SuperResolutionMode? value) {},
             tiles: [
               for (final mode in SuperResolutionMode.values)
                 SettingsTile<SuperResolutionMode>.radioTile(
@@ -72,6 +81,21 @@ class _SuperResolutionSettingsState extends State<SuperResolutionSettings> {
                   await GStorage.putSetting<bool>(
                     SettingsKeys.playerDebandEnable,
                     debandEnable,
+                  );
+                  if (mounted) setState(() {});
+                },
+              ),
+              SettingsTile.switchTile(
+                leading: Icons.motion_photos_on_rounded,
+                title: Text('运动补偿'),
+                description: Text(
+                    '帧时钟对齐刷新率, 消除 24fps 源的横移顿挫 (非补帧); 120Hz 屏收益最大 (5x24 整数倍), 200Hz 屏看番建议切 120Hz, 下次播放生效'),
+                initialValue: motionCompensationEnable,
+                onToggle: (value) async {
+                  motionCompensationEnable = value ?? !motionCompensationEnable;
+                  await GStorage.putSetting<bool>(
+                    SettingsKeys.playerMotionCompensationEnable,
+                    motionCompensationEnable,
                   );
                   if (mounted) setState(() {});
                 },

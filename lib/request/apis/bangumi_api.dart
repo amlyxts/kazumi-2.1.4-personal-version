@@ -16,6 +16,7 @@ import 'package:kazumi/modules/bangumi/bangumi_collection_type.dart';
 import 'package:kazumi/modules/comments/comment_item.dart';
 import 'package:kazumi/utils/search_parser.dart';
 import 'package:kazumi/utils/async_rate_limiter.dart';
+import 'package:kazumi/services/storage/storage.dart';
 
 class BangumiSearchPage {
   const BangumiSearchPage({
@@ -369,6 +370,32 @@ class BangumiApi {
       return BangumiItem.fromJson(jsonData);
     } catch (e) {
       KazumiLogger().e('Network: resolve bangumi item failed', error: e);
+      return null;
+    }
+  }
+
+  /// [my新增] 认证态按 ID 直取详情 — bgm 对 nsfw 条目的未认证请求一律
+  /// 404 (实测 api.bgmapi.com / next.bgm.tv 一致), 认证后全量放行且带
+  /// nsfw 标志; 里番条目 (搜索端点被 bgm 屏蔽) 的唯一详情通道。
+  /// 未登录 bangumi (token 空) 时返回 null, 调用方提示先登录。
+  static Future<BangumiItem?> getBangumiInfoByIDAuth(int id) async {
+    final token = GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken);
+    if (token.trim().isEmpty) {
+      KazumiLogger().w('BangumiApi: auth detail skipped, no token');
+      return null;
+    }
+    try {
+      final jsonData = await _client.get(
+        ApiEndpoints.formatUrl(
+            ApiEndpoints.bangumiAuthAPIMirrorDomain +
+                ApiEndpoints.bangumiInfoByID,
+            [id]),
+        requiresAuth: true,
+      );
+      if (jsonData is! Map) return null;
+      return BangumiItem.fromJson(Map<String, dynamic>.from(jsonData));
+    } catch (e) {
+      KazumiLogger().e('Network: resolve bangumi item (auth) failed', error: e);
       return null;
     }
   }

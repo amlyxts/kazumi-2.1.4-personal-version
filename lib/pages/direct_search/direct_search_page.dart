@@ -31,6 +31,8 @@ import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:kazumi/services/storage/storage.dart';
+import 'package:kazumi/services/bgm/bgm_web_service.dart';
+import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
@@ -968,6 +970,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     // [my修复] 本地存储用 CollectType 语义 (1=在看 2=想看 4=看过), 与
     // Bangumi API 枚举 (1=想看 2=看过) 数值不同 — 之前传错枚举导致选项错位。
     int? selectedType = matched?.type;
+    // [my新增] bgm 账号同步勾选: 里番条目 bgm 搜索端点屏蔽, 走 cookie
+    // 网页搜索拿 bgm ID 后按 ID 直写收藏 (POST 实测 202 放行)
+    bool alsoSyncBgm = false;
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
@@ -1001,6 +1006,16 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                     dense: true,
                     onTap: () => setDialogState(() => selectedType = 0),
                   ),
+                // [my新增] bgm 账号同步: 按名字走 bgm.tv 网页搜索选 ID
+                CheckboxListTile(
+                  value: alsoSyncBgm,
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('同时收藏到 bgm 账号 (查 ID)',
+                      style: TextStyle(fontSize: 13)),
+                  onChanged: (v) => setDialogState(() => alsoSyncBgm = v ?? false),
+                ),
               ],
             ),
             actions: [
@@ -1028,6 +1043,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   // 现取现用避免旧 id 进本地库
                   KazumiDialog.dismiss();
                   unawaited(_collectAsSeries(card, _fabricatedItem(card), type));
+                  // [my新增] bgm 账号同步 (独立于本地收藏, 失败不回滚本地)
+                  if (alsoSyncBgm) {
+                    unawaited(_collectToBangumi(
+                        SeriesDetector.namingName(card.title), type));
+                  }
                 },
                 child: const Text('确定'),
               ),
@@ -1036,6 +1056,82 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         },
       ),
     );
+  }
+
+  /// [my新增] bgm 账号收藏: cookie 网页搜索拿候选 (nsfw 条目 API 搜索被
+  /// bgm 屏蔽, 网页端可查) → 用户选 ID → 认证详情存在性确认 → POST 写入
+  /// bgm 账号 (收藏端点对 nsfw 实测 202 放行)。独立于本地收藏链路, 失败
+  /// 不回滚本地。
+  Future<void> _collectToBangumi(String title, int appType) async {
+    // token 预检: 无 token 时认证详情 404 / POST 401, 提前引导
+    final token = GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken);
+    if (token.trim().isEmpty) {
+      KazumiDialog.showToast(message: '请先登录 bangumi 账号 (我的 → bangumi)');
+      return;
+    }
+    try {
+      final cands = await BgmWebService.search(title);
+      if (cands.isEmpty) {
+        KazumiDialog.showToast(message: 'bgm 网页搜索无结果 (cookie 失效也是此表现)');
+        return;
+      }
+      final shown = cands.take(30).toList();
+      int? picked = shown.length == 1 ? shown.first.id : null;
+      final confirmed = await KazumiDialog.show<bool>(
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('选择 bgm 条目', style: TextStyle(fontSize: 16)),
+            content: SizedBox(
+              width: 420,
+              height: 320,
+              child: ListView.builder(
+                itemCount: shown.length,
+                itemBuilder: (context, index) {
+                  final c = shown[index];
+                  return RadioListTile<int>(
+                    value: c.id,
+                    groupValue: picked,
+                    title: Text(c.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13)),
+                    subtitle: Text('bgm ID: ${c.id}',
+                        style: const TextStyle(fontSize: 11)),
+                    dense: true,
+                    onChanged: (v) => setDialogState(() => picked = v),
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: KazumiDialog.dismiss,
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('确定'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (confirmed != true || picked == null) return;
+      final bgmId = picked!;
+      // 认证详情: 存在性确认 (nsfw 未认证 404), 也是写入前的兜底校验
+      final info = await BangumiApi.getBangumiInfoByIDAuth(bgmId);
+      if (info == null) {
+        KazumiDialog.showToast(message: 'bgm 条目详情获取失败 (ID $bgmId)');
+        return;
+      }
+      final ok = await BangumiApi.updateBangumiByType(bgmId, appType);
+      KazumiDialog.showToast(
+          message: ok
+              ? '已收藏到 bgm 账号 (ID $bgmId · ${info.name})'
+              : 'bgm 收藏写入失败, 请稍后重试');
+    } catch (e) {
+      KazumiDialog.showToast(message: 'bgm 收藏失败: ${e.toString()}');
+    }
   }
 
   /// [my新增] 收藏即作品 (混合方案, 依据 T1 实测): 先走现成取集链路

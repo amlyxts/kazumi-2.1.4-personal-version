@@ -1,4 +1,6 @@
 import 'package:flutter/foundation.dart';
+import 'package:kazumi/modules/collect/collect_module.dart';
+import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/collect/collect_sync_merger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/logging/logger.dart';
@@ -172,6 +174,40 @@ class BangumiSyncService extends ChangeNotifier {
           onProgress: onProgress,
         );
 
+        // [my新增] nsfw 归区: bgm 收藏列表对 nsfw 条目"返回但脱敏"
+        // (subject name/name_cn 全空, 2026-11-19 实测; 旧判决"不在返回"
+        // 已过时)。脱敏 = nsfw 信号: 认证按 ID 直取补全元数据 (未认证
+        // 一律 404), 存量错区条目迁里番区, 新拉条目直接归里番区。
+        final nsfwIds = <int>{
+          for (final c in remoteCollection)
+            if (c.name.isEmpty && c.nameCn.isEmpty) c.bangumiId,
+        };
+        if (nsfwIds.isNotEmpty) {
+          onProgress?.call('正在处理 bgm nsfw 条目归区', 0, 0);
+          final locals = GStorage.collectibles.values.toList();
+          for (final local in locals) {
+            if (local.section != 0 ||
+                !nsfwIds.contains(local.bangumiItem.id)) {
+              continue;
+            }
+            final detail =
+                await BangumiApi.getBangumiInfoByIDAuth(local.bangumiItem.id);
+            await GStorage.putCollectible(CollectedBangumi(
+              detail ?? local.bangumiItem,
+              local.time,
+              local.type,
+              section: 1,
+            ));
+            await GStorage.appendCollectChange(
+              bangumiId: local.bangumiItem.id,
+              action: 2,
+              type: local.type,
+            );
+            KazumiLogger().i(
+                'BangumiSync: nsfw collectible ${local.bangumiItem.id} moved to adult section');
+          }
+        }
+
         // [my修改] 里番区 (section=1) 永不上传 Bangumi — 从本地侧剔除,
         // 远端也不会有这些条目, 双向都不受影响
         final mergePlan = CollectSyncMerger.planBangumi(
@@ -208,7 +244,8 @@ class BangumiSyncService extends ChangeNotifier {
         if (mergePlan.remoteOnlyPuts.isNotEmpty) {
           onProgress?.call('正在补全本地缺失状态', syncedCount, totalOperations);
           for (final mutation in mergePlan.remoteOnlyPuts) {
-            await _applyLocalMutation(mutation);
+            await _applyLocalMutation(
+                await _patchNsfwMutation(mutation, nsfwIds));
             syncedCount++;
             onProgress?.call('正在补全本地缺失状态', syncedCount, totalOperations);
           }
@@ -234,7 +271,8 @@ class BangumiSyncService extends ChangeNotifier {
           onProgress?.call(
               '${priority.label}：正在更新本地冲突状态', syncedCount, totalOperations);
           for (final mutation in mergePlan.conflictLocalUpdates) {
-            await _applyLocalMutation(mutation);
+            await _applyLocalMutation(
+                await _patchNsfwMutation(mutation, nsfwIds));
             syncedCount++;
             onProgress?.call(
                 '${priority.label}：正在更新本地冲突状态', syncedCount, totalOperations);
@@ -246,5 +284,23 @@ class BangumiSyncService extends ChangeNotifier {
         rethrow;
       }
     });
+  }
+
+  /// [my新增] 脱敏 (nsfw) 条目补全: 认证按 ID 直取全量元数据并归里番区
+  /// (section=1); 详情拉取失败时仍归区 (脱敏数据总好过硬塞表番区)。
+  Future<BangumiLocalMutation> _patchNsfwMutation(
+      BangumiLocalMutation mutation, Set<int> nsfwIds) async {
+    final id = mutation.collectible.bangumiItem.id;
+    if (!nsfwIds.contains(id)) return mutation;
+    BangumiItem item = mutation.collectible.bangumiItem;
+    try {
+      final detail = await BangumiApi.getBangumiInfoByIDAuth(id);
+      if (detail != null) item = detail;
+    } catch (_) {}
+    return BangumiLocalMutation(
+      collectible: CollectedBangumi(item, mutation.collectible.time,
+          mutation.collectible.type, section: 1),
+      changeAction: mutation.changeAction,
+    );
   }
 }

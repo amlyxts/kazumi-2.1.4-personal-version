@@ -332,11 +332,12 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                     ),
                     const SizedBox(width: 10),
                     ElevatedButton(
-                      onPressed: !hasAccount
+                      // [my修改] Windows 无需账号 (搜索走 WebView 共享会话)
+                      onPressed: (Platform.isWindows || hasAccount)
                           ? null
                           : () async {
                               setDialogState(
-                                  () => _bgmMatchProgress = '匹配中…');
+                                  () => _bgmMatchProgress = '匹配并同步中…');
                               // [my修复] 匹配前先 ensureCookie (自动登录
                               // 接线): 此前裸调 search, 新会话逐条静默失败
                               try {
@@ -347,6 +348,9 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                                 return;
                               }
                               var done = 0;
+                              var synced = 0;
+                              final token = GStorage.getSetting<String>(
+                                  SettingsKeys.bangumiAccessToken);
                               for (final c in unmapped) {
                                 final key =
                                     c.bangumiItem.id.toString();
@@ -383,18 +387,29 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                                           score: info.ratingScore,
                                           coverUrl: (info.images['large'] ?? info.images['common'] ?? ''));
                                       done++;
+                                      // [my新增] 同步收藏状态到 bgm 账号
+                                      // (存量收藏批量补上传; type=0 跳过)
+                                      if (c.type != 0 &&
+                                          token.trim().isNotEmpty) {
+                                        try {
+                                          final ok = await BangumiApi
+                                              .updateBangumiByType(
+                                                  best.id, c.type);
+                                          if (ok) synced++;
+                                        } catch (_) {}
+                                      }
                                     }
                                   }
                                 } catch (_) {}
-                                setDialogState(() =>
-                                    _bgmMatchProgress = '匹配中… $done/${unmapped.length} (${c.bangumiItem.nameCn})');
+                                setDialogState(() => _bgmMatchProgress =
+                                    '匹配并同步中… 关联$done/同步$synced / 共${unmapped.length} (${c.bangumiItem.nameCn})');
                               }
                               setDialogState(() => _bgmMatchProgress =
-                                  '完成: 新关联 $done 条');
+                                  '完成: 新关联 $done 条, 同步 bgm $synced 条');
                             },
                       child: Text(unmapped.isEmpty
                           ? '无未关联条目'
-                          : '自动匹配 (${unmapped.length} 条)'),
+                          : '自动匹配并同步 (${unmapped.length} 条)'),
                     ),
                   ]),
                   if (_bgmMatchProgress.isNotEmpty)

@@ -15,6 +15,7 @@ import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/services/bgm/bgm_web_service.dart';
 import 'package:kazumi/pages/adult_collect/bgm_login_webview_page.dart';
 import 'package:kazumi/pages/adult_collect/bgm_candidate_picker.dart';
+import 'package:kazumi/pages/adult_collect/bgm_association_page.dart';
 import 'package:kazumi/services/skip/skip_time_service.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/pages/direct_search/series_detector.dart';
@@ -558,34 +559,19 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                       child: const Text('浏览器登录自动取'),
                     ),
                   const Divider(height: 20),
-                  const Text('已关联:', style: TextStyle(fontSize: 12)),
+                  // [my重构] 已关联管理从弹窗内嵌列表分出单页 (列表拥挤,
+                  // 管理场景需要搜索/对照/批量操作空间)
                   SizedBox(
-                    height: 200,
-                    child: map.isEmpty
-                        ? const Text('暂无',
-                            style: TextStyle(fontSize: 12))
-                        : ListView.builder(
-                            itemCount: map.length,
-                            itemBuilder: (context, index) {
-                              final key = map.keys.elementAt(index);
-                              final m = map[key]!;
-                              return ListTile(
-                                dense: true,
-                                title: Text(
-                                    '${m['nameCn'] ?? m['name'] ?? '?'} (评分 ${m['score']})',
-                                    style: const TextStyle(fontSize: 13)),
-                                subtitle: Text('bgm ${m['bgmId']}',
-                                    style: const TextStyle(fontSize: 11)),
-                                trailing: TextButton(
-                                  child: const Text('解除'),
-                                  onPressed: () {
-                                    BgmWebService.removeAssociation(key);
-                                    setDialogState(() {});
-                                  },
-                                ),
-                              );
-                            },
-                          ),
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.list_alt, size: 16),
+                      label: Text('已关联管理 (${map.length} 条)'),
+                      onPressed: () async {
+                        await Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const BgmAssociationPage()));
+                        if (context.mounted) setDialogState(() {});
+                      },
+                    ),
                   ),
                 ],
               ),

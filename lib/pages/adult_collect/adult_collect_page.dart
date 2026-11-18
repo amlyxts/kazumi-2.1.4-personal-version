@@ -334,8 +334,7 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                     ElevatedButton(
                       // [my修改] Windows 无需账号 (搜索走 WebView 共享会话)
                       onPressed: (Platform.isWindows || hasAccount)
-                          ? null
-                          : () async {
+                          ? () async {
                               setDialogState(
                                   () => _bgmMatchProgress = '匹配并同步中…');
                               // [my修复] 匹配前先 ensureCookie (自动登录
@@ -406,7 +405,8 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                               }
                               setDialogState(() => _bgmMatchProgress =
                                   '完成: 新关联 $done 条, 同步 bgm $synced 条');
-                            },
+                            }
+                          : null,
                       child: Text(unmapped.isEmpty
                           ? '无未关联条目'
                           : '自动匹配并同步 (${unmapped.length} 条)'),

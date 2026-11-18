@@ -305,12 +305,23 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                   const SizedBox(height: 8),
                   Row(children: [
                     ElevatedButton(
-                      onPressed: () {
+                      onPressed: () async {
                         GStorage.putSetting(SettingsKeys.bgmAccountEmail,
                             _bgmEmailController.text.trim());
                         GStorage.putSetting(SettingsKeys.bgmAccountPassword,
                             _bgmPasswordController.text.trim());
-                        KazumiDialog.showToast(message: '账号已保存 (失效时自动重登)');
+                        // [my修复] 保存即验证登录 (自动登录闭环接线):
+                        // 成功 cookie 落库, 失败屏显原因 (密码错/验证码等)
+                        setDialogState(
+                            () => _bgmMatchProgress = '正在登录 bgm…');
+                        try {
+                          await BgmWebService.ensureCookie();
+                          setDialogState(() =>
+                              _bgmMatchProgress = 'bgm 登录成功, cookie 已就绪');
+                        } catch (e) {
+                          setDialogState(() => _bgmMatchProgress =
+                              'bgm 登录失败: ${e.toString()}');
+                        }
                       },
                       child: const Text('保存账号'),
                     ),
@@ -321,6 +332,15 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                           : () async {
                               setDialogState(
                                   () => _bgmMatchProgress = '匹配中…');
+                              // [my修复] 匹配前先 ensureCookie (自动登录
+                              // 接线): 此前裸调 search, 新会话逐条静默失败
+                              try {
+                                await BgmWebService.ensureCookie();
+                              } catch (e) {
+                                setDialogState(() => _bgmMatchProgress =
+                                    'cookie 线不可用: ${e.toString()}');
+                                return;
+                              }
                               var done = 0;
                               for (final c in unmapped) {
                                 final key =

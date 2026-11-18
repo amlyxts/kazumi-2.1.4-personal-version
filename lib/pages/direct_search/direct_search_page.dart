@@ -1070,6 +1070,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       return;
     }
     try {
+      // [my修复] cookie 线入口必须 ensureCookie: 空/失效自动用已存账号
+      // 重登 (含 OCR 验证码兜底); 此前裸调 search, 新会话必报 cookie 未配置
+      await BgmWebService.ensureCookie();
       final cands = await BgmWebService.search(title);
       if (cands.isEmpty) {
         KazumiDialog.showToast(message: 'bgm 网页搜索无结果 (cookie 失效也是此表现)');

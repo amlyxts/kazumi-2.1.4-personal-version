@@ -649,6 +649,8 @@ class _AdultCollectPageState extends State<AdultCollectPage>
           try {
             final ok =
                 await BangumiApi.updateBangumiByType(bgmId, type.value);
+            KazumiLogger().i(
+                'AdultCollect: bgm type sync id=$bgmId type=${type.value} ok=$ok');
             if (mounted && ok) {
               KazumiDialog.showToast(message: '已同步到 bgm (${type.label})');
             }

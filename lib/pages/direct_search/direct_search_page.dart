@@ -971,8 +971,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     // Bangumi API 枚举 (1=想看 2=看过) 数值不同 — 之前传错枚举导致选项错位。
     int? selectedType = matched?.type;
     // [my新增] bgm 账号同步勾选: 里番条目 bgm 搜索端点屏蔽, 走 cookie
-    // 网页搜索拿 bgm ID 后按 ID 直写收藏 (POST 实测 202 放行)
-    bool alsoSyncBgm = false;
+    // 网页搜索拿 bgm ID 后按 ID 直写收藏 (POST 实测 202 放行)。
+    // [my修改] 默认勾选 (用户要求)
+    bool alsoSyncBgm = true;
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
@@ -1065,9 +1066,9 @@ class _DirectSearchPageState extends State<DirectSearchPage>
   Future<void> _collectWithBgmFlow(_BrowseCard card, int appType) async {
     KazumiLogger().i('BgmCollect: flow start, title=${card.title}');
     final bgmId = await _pickBgmId(SeriesDetector.namingName(card.title));
-    // 本地收藏 (无论 bgm 是否选到)
-    await _collectAsSeries(card, _fabricatedItem(card), appType);
+    // [my修改] 候选取消/无结果/失败 = 整体放弃 (用户确认: 不本地收藏)
     if (bgmId == null) return;
+    await _collectAsSeries(card, _fabricatedItem(card), appType);
     await _postBgmCollect(bgmId, appType);
   }
 
@@ -1081,7 +1082,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       final cands = await BgmWebService.search(title);
       KazumiLogger().i('BgmCollect: search done, ${cands.length} candidates');
       if (cands.isEmpty) {
-        KazumiDialog.showToast(message: 'bgm 网页搜索无结果, 已仅收藏本地');
+        KazumiDialog.showToast(message: 'bgm 网页搜索无结果, 已取消收藏');
         return null;
       }
       final shown = cands.take(30).toList();
@@ -1130,7 +1131,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       return picked;
     } catch (e) {
       KazumiLogger().w('BgmCollect: pick failed', error: e);
-      KazumiDialog.showToast(message: 'bgm 搜索失败: ${e.toString()} (已仅收藏本地)');
+      KazumiDialog.showToast(message: 'bgm 搜索失败: ${e.toString()} (已取消收藏)');
       return null;
     }
   }

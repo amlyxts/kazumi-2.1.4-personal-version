@@ -598,9 +598,26 @@ class _AdultCollectPageState extends State<AdultCollectPage>
       return;
     }
     try {
-      // 里番区改类型: 纯本地 (section 保持 1, 不触发 Bangumi 同步)
+      // 里番区改类型: 本地落库 (section 保持 1, 不进 Bangumi 拉取合并)
       await _collectController.addCollectLocalOnly(item,
           type: type.value, section: 1);
+      // [my新增] 真实 bgm 条目: 类型变更同步到 bgm 账号 (源直连哈希条目
+      // 永不上传)。用户实测需求: 里番收藏页改分类应反映到 bgm
+      if (!CollectSectionRepair.isDirectSourceItem(item)) {
+        final token =
+            GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken);
+        if (token.trim().isNotEmpty) {
+          try {
+            final ok = await BangumiApi.updateBangumiByType(
+                item.id, type.value);
+            if (mounted && ok) {
+              KazumiDialog.showToast(message: '已同步到 bgm (${type.label})');
+            }
+          } catch (e) {
+            KazumiLogger().w('AdultCollect: bgm type sync failed', error: e);
+          }
+        }
+      }
     } catch (_) {
       KazumiDialog.showToast(message: '修改收藏状态失败，请稍后重试');
     }

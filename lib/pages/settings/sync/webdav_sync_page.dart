@@ -9,6 +9,7 @@ import 'package:kazumi/pages/settings/sync/sync_settings_widgets.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/sync/webdav.dart';
+import 'package:kazumi/services/sync/assets_sync_service.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/sync/danmaku_shield_sync_service.dart';
 
@@ -61,6 +62,16 @@ class _WebDavSyncPageState extends State<WebDavSyncPage> {
         if (mounted) setState(() => _message = '正在同步观看记录…');
         await webDav.syncHistory();
         _message = '观看记录已同步';
+      });
+
+  /// [my新增] 手动应用设置同步 (最近写入优先, 应用的键数屏显)。
+  Future<void> _syncSettingsNow() => _run(() async {
+        if (mounted) setState(() => _message = '正在同步应用设置…');
+        final applied =
+            await AssetsSyncService.instance.syncSettingsNow();
+        _message = applied > 0
+            ? '应用设置已同步 (从云端应用 $applied 项)'
+            : '应用设置已同步 (云端无新增)';
       });
 
   /// [my新增] 手动插件列表同步 (并集合并, 错误屏显) — 启动自动拉取之外的
@@ -298,6 +309,14 @@ class _WebDavSyncPageState extends State<WebDavSyncPage> {
               onPressed:
                   enabled && pluginSync && !_busy ? _syncPlugins : null,
               text: '立即同步插件列表',
+              icon: Icons.sync_rounded,
+            ),
+            StateActionButton.tonal(
+              onPressed:
+                  enabled && settingsSync && !_busy
+                      ? _syncSettingsNow
+                      : null,
+              text: '立即同步应用设置',
               icon: Icons.sync_rounded,
             ),
             if (_message != null)

@@ -106,6 +106,39 @@ class AssetsSyncService {
     return out;
   }
 
+  /// [my新增] 手动设置同步 (拉取+推送, 返回云端应用的键数) — 设置页手动
+  /// 按钮用; 语义与自动拉取一致 (最近写入优先, 排除名单过滤)。
+  Future<int> syncSettingsNow() async {
+    final webDav = _webDav();
+    if (webDav == null || !webDav.isSettingsSyncEnabled) {
+      throw Exception('设置同步未启用或 WebDAV 未配置');
+    }
+    var applied = 0;
+    await webDav.syncSettings(
+      merge: (remote, remoteUpdatedAt) async {
+        final localUpdatedAt =
+            GStorage.getSetting(SettingsKeys.webDavSettingsSyncUpdatedAt);
+        if (remoteUpdatedAt > localUpdatedAt && remote.isNotEmpty) {
+          for (final e in remote.entries) {
+            if (SettingsKeys.settingsSyncExcluded.contains(e.key)) {
+              continue;
+            }
+            final key = SettingsKeys.byName(e.key);
+            if (key == null) continue;
+            await GStorage.putSettingRaw(key, e.value);
+            applied++;
+          }
+        }
+        GStorage.putSetting(SettingsKeys.webDavSettingsSyncUpdatedAt,
+            DateTime.now().millisecondsSinceEpoch);
+        return _exportSettings();
+      },
+      export: _exportSettings,
+      localUpdatedAt: () => DateTime.now().millisecondsSinceEpoch,
+    );
+    return applied;
+  }
+
   Future<void> _pullSettings() async {
     final webDav = _webDav();
     if (webDav == null || !webDav.isSettingsSyncEnabled) return;

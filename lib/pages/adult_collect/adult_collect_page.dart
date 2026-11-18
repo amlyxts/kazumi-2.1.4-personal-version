@@ -14,6 +14,7 @@ import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/services/bgm/bgm_web_service.dart';
 import 'package:kazumi/pages/adult_collect/bgm_login_webview_page.dart';
+import 'package:kazumi/pages/adult_collect/bgm_candidate_picker.dart';
 import 'package:kazumi/services/skip/skip_time_service.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/pages/direct_search/series_detector.dart';
@@ -351,6 +352,8 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                               final token = GStorage.getSetting<String>(
                                   SettingsKeys.bangumiAccessToken);
                               var idx = 0;
+                              // [my新增] 自动匹配失败条目 → 手动确认队列
+                              final manual = <(CollectedBangumi, List<BgmWebSubject>)>[];
                               for (final c in unmapped) {
                                 idx++;
                                 final key =
@@ -412,7 +415,14 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                                           if (ok) synced++;
                                         } catch (_) {}
                                       }
+                                    } else {
+                                      KazumiLogger().w(
+                                          'BgmMatch #$idx: 认证详情获取失败 id=${best.id}');
+                                      manual.add((c, cands));
                                     }
+                                  } else {
+                                    // [my新增] 低分/无候选 → 手动确认队列
+                                    manual.add((c, cands));
                                   }
                                 } catch (e) {
                                   KazumiLogger().w(
@@ -422,6 +432,57 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                                 setDialogState(() => _bgmMatchProgress =
                                     '匹配并同步中… 关联$done/同步$synced / 共${unmapped.length} (${c.bangumiItem.nameCn})');
                               }
+                              // [my新增] 手动确认阶段: 自动没把握的逐条
+                              // 弹"当前名字 + 候选"让用户挑 (可跳过)
+                              if (manual.isNotEmpty) {
+                                setDialogState(() => _bgmMatchProgress =
+                                    '自动完成, 待手动确认 ${manual.length} 条…');
+                              }
+                              var manualDone = 0;
+                              for (final (c, cands0) in manual) {
+                                final title = c.bangumiItem.nameCn
+                                        .isNotEmpty
+                                    ? c.bangumiItem.nameCn
+                                    : c.bangumiItem.name;
+                                var cands = cands0;
+                                try {
+                                  if (cands.isEmpty) {
+                                    cands = await BgmWebService.search(title);
+                                  }
+                                } catch (_) {}
+                                if (cands.isEmpty) continue;
+                                final picked = await showBgmCandidateDialog(
+                                    context, title, cands);
+                                if (picked == null) continue;
+                                try {
+                                  final info = await BangumiApi
+                                      .getBangumiInfoByIDAuth(picked);
+                                  if (info == null) continue;
+                                  BgmWebService.associate(
+                                      c.bangumiItem.id.toString(),
+                                      bgmId: picked,
+                                      nameCn: info.nameCn,
+                                      name: info.name,
+                                      score: info.ratingScore,
+                                      coverUrl: (info.images['large'] ??
+                                          info.images['common'] ??
+                                          ''));
+                                  manualDone++;
+                                  if (c.type != 0 &&
+                                      token.trim().isNotEmpty) {
+                                    try {
+                                      final ok = await BangumiApi
+                                          .updateBangumiByType(
+                                              picked, c.type);
+                                      if (ok) synced++;
+                                    } catch (_) {}
+                                  }
+                                  setDialogState(() => _bgmMatchProgress =
+                                      '手动确认中… $manualDone/${manual.length}');
+                                } catch (_) {}
+                              }
+                              setDialogState(() => _bgmMatchProgress =
+                                  '完成: 新关联 $done+$manualDone 条, 同步 bgm $synced 条');
                               setDialogState(() => _bgmMatchProgress =
                                   '完成: 新关联 $done 条, 同步 bgm $synced 条');
                             }

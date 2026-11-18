@@ -25,6 +25,7 @@ import 'package:kazumi/pages/direct_search/series_detector.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/pages/adult_collect/bgm_candidate_picker.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/request/core/network_config.dart';
 import 'package:kazumi/services/flaresolverr/flaresolverr_service.dart';
@@ -1107,48 +1108,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
         KazumiDialog.showToast(message: 'bgm 网页搜索无结果, 已取消收藏');
         return null;
       }
-      final shown = cands.take(30).toList();
-      int? picked = shown.length == 1 ? shown.first.id : null;
-      final confirmed = await KazumiDialog.show<bool>(
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: const Text('选择 bgm 条目', style: TextStyle(fontSize: 16)),
-            content: SizedBox(
-              width: 420,
-              height: 320,
-              child: ListView.builder(
-                itemCount: shown.length,
-                itemBuilder: (context, index) {
-                  final c = shown[index];
-                  return RadioListTile<int>(
-                    value: c.id,
-                    groupValue: picked,
-                    title: Text(c.name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13)),
-                    subtitle: Text('bgm ID: ${c.id}',
-                        style: const TextStyle(fontSize: 11)),
-                    dense: true,
-                    onChanged: (v) => setDialogState(() => picked = v),
-                  );
-                },
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: KazumiDialog.dismiss,
-                child: const Text('取消'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('确定'),
-              ),
-            ],
-          ),
-        ),
-      );
-      if (confirmed != true || picked == null) return null;
+      final picked = await showBgmCandidateDialog(context, title, cands);
       KazumiLogger().i('BgmCollect: picked id=$picked');
       return picked;
     } catch (e) {

@@ -1062,14 +1062,36 @@ class _DirectSearchPageState extends State<DirectSearchPage>
 
   /// [my新增] bgm 勾选收藏流 (顺序按用户要求: 先 bgm 判断/候选选择,
   /// 后本地收藏): 弹候选选 ID → 本地收藏 (原 _collectAsSeries 链) →
-  /// POST 写入 bgm 账号。候选取消/搜索失败 = 仅本地收藏, 不拦本地。
+  /// POST 写入 bgm 账号 → 关联映射入库 (里番页改分类/删除同步的依据)。
+  /// 候选取消/搜索失败 = 整体放弃 (不本地收藏)。
   Future<void> _collectWithBgmFlow(_BrowseCard card, int appType) async {
     KazumiLogger().i('BgmCollect: flow start, title=${card.title}');
     final bgmId = await _pickBgmId(SeriesDetector.namingName(card.title));
-    // [my修改] 候选取消/无结果/失败 = 整体放弃 (用户确认: 不本地收藏)
     if (bgmId == null) return;
+    final info = await BangumiApi.getBangumiInfoByIDAuth(bgmId);
+    if (info == null) {
+      KazumiLogger().w('BgmCollect: auth detail failed, id=$bgmId');
+      KazumiDialog.showToast(message: 'bgm 条目详情获取失败 (ID $bgmId), 已取消收藏');
+      return;
+    }
     await _collectAsSeries(card, _fabricatedItem(card), appType);
-    await _postBgmCollect(bgmId, appType);
+    final ok = await BangumiApi.updateBangumiByType(bgmId, appType);
+    KazumiLogger().i('BgmCollect: POST result=$ok, id=$bgmId');
+    KazumiDialog.showToast(
+        message: ok
+            ? '已收藏到 bgm 账号 (ID $bgmId · ${info.name})'
+            : 'bgm 收藏写入失败, 请稍后重试');
+    // [my新增] 本地条目 ↔ bgm ID 关联入库: 本地收藏的源直连条目 (哈希 id)
+    // 本身无真实 bgm id, 里番页改分类/删除的 bgm 同步按此映射寻址
+    final entry = _collectedEntryFor(card);
+    if (entry != null) {
+      BgmWebService.associate(entry.bangumiItem.id.toString(),
+          bgmId: bgmId,
+          nameCn: info.nameCn,
+          name: info.name,
+          score: info.ratingScore,
+          coverUrl: info.images['large'] ?? info.images['common'] ?? '');
+    }
   }
 
   /// [my新增] bgm 候选选择: cookie 网页搜索拿候选 (nsfw 条目 API 搜索被
@@ -1136,34 +1158,7 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     }
   }
 
-  /// [my新增] bgm 收藏写入: 认证详情存在性确认 → POST (收藏端点对 nsfw
-  /// 实测 202 放行)。
-  Future<void> _postBgmCollect(int bgmId, int appType) async {
-    // token 预检: 无 token 时认证详情 404 / POST 401, 提前引导
-    final token = GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken);
-    if (token.trim().isEmpty) {
-      KazumiDialog.showToast(message: '请先登录 bangumi 账号 (我的 → bangumi)');
-      return;
-    }
-    try {
-      // 认证详情: 存在性确认 (nsfw 未认证 404), 也是写入前的兜底校验
-      final info = await BangumiApi.getBangumiInfoByIDAuth(bgmId);
-      if (info == null) {
-        KazumiLogger().w('BgmCollect: auth detail failed, id=$bgmId');
-        KazumiDialog.showToast(message: 'bgm 条目详情获取失败 (ID $bgmId)');
-        return;
-      }
-      final ok = await BangumiApi.updateBangumiByType(bgmId, appType);
-      KazumiLogger().i('BgmCollect: POST result=$ok, id=$bgmId');
-      KazumiDialog.showToast(
-          message: ok
-              ? '已收藏到 bgm 账号 (ID $bgmId · ${info.name})'
-              : 'bgm 收藏写入失败, 请稍后重试');
-    } catch (e) {
-      KazumiLogger().w('BgmCollect: post failed', error: e);
-      KazumiDialog.showToast(message: 'bgm 收藏失败: ${e.toString()}');
-    }
-  }
+
 
   /// [my新增] 收藏即作品 (混合方案, 依据 T1 实测): 先走现成取集链路
   /// 拿观看页播放列表, 按"相邻标题公共前缀相似度"判定系列/单集 —

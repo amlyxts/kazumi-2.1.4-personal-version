@@ -324,6 +324,38 @@ class BgmWebService {
     return out;
   }
 
+  /// [my新增] webview 删除 bgm 收藏 — bgm 官方 API 无删除端点 (实测
+  /// DELETE 405/404), 网页端删除 = GET /subject/{id}/remove?gh={formhash}
+  /// (eraseSubjectCollect JS 复刻; GET 不触发指纹墙)。gh 从条目页
+  /// interest/update?gh= 参数提取。返回是否成功。
+  static Future<bool> removeSubjectCollectWeb(int subjectId) async {
+    try {
+      final html = await WebviewPageFetchService.instance
+          .fetchHtml('https://bgm.tv/subject/$subjectId');
+      final gh = RegExp(r'interest/update\?gh=([0-9a-f]+)')
+              .firstMatch(html)
+              ?.group(1) ??
+          RegExp(r'name="formhash"[^>]*value="([0-9a-f]+)"')
+              .firstMatch(html)
+              ?.group(1);
+      if (gh == null || gh.isEmpty) {
+        KazumiLogger().w('BgmRemove: gh 提取失败 (subject $subjectId)');
+        return false;
+      }
+      final after = await WebviewPageFetchService.instance.fetchHtml(
+          'https://bgm.tv/subject/$subjectId/remove?gh=$gh');
+      // 校验: 已收藏态的收藏框含"修改"内联窗链接; 移除后消失
+      final stillCollected =
+          after.contains('#TB_inline') && after.contains('修改');
+      KazumiLogger().i(
+          'BgmRemove: subject $subjectId remove done, stillCollected=$stillCollected');
+      return !stillCollected;
+    } catch (e) {
+      KazumiLogger().w('BgmRemove: remove failed', error: e);
+      return false;
+    }
+  }
+
   // —— 里番 bgm 关联映射 (JSON 持久: 收藏键 → 元数据) ——
 
   static Map<String, Map<String, dynamic>>? _mapCache;

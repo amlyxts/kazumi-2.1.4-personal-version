@@ -592,24 +592,48 @@ class _AdultCollectPageState extends State<AdultCollectPage>
     }
   }
 
+  /// [my新增] 解析 bgm 同步目标 id: 真实 bgm 条目用自身 id; 源直连条目
+  /// (哈希 id) 按 adultBgmMap 映射寻址 (bgm 勾选收藏流入库)。null = 无
+  /// 同步目标。
+  int? _resolveBgmSyncId(BangumiItem item) {
+    if (!CollectSectionRepair.isDirectSourceItem(item)) return item.id;
+    final assoc = BgmWebService.loadMap()[item.id.toString()];
+    if (assoc == null) return null;
+    return (assoc['bgmId'] as num?)?.toInt();
+  }
+
   Future<void> _changeType(BangumiItem item, CollectType type) async {    if (type == CollectType.none) {
+      // [my新增] bgm 联动删除: API 无删除端点 (实测 405/404), 走 webview
+      // GET /subject/{id}/remove?gh= (eraseSubjectCollect 复刻, GET 不触
+      // 发指纹墙)
+      final bgmId = _resolveBgmSyncId(item);
       await _collectController.deleteCollectLocalOnly(item);
       if (mounted) KazumiDialog.showToast(message: '已取消收藏');
+      if (bgmId != null && Platform.isWindows) {
+        final removed = await BgmWebService.removeSubjectCollectWeb(bgmId);
+        if (mounted) {
+          KazumiDialog.showToast(
+              message: removed
+                  ? '已在 bgm 同步删除收藏'
+                  : 'bgm 删除未成功 (可网页端手动删)');
+        }
+      }
       return;
     }
     try {
       // 里番区改类型: 本地落库 (section 保持 1, 不进 Bangumi 拉取合并)
       await _collectController.addCollectLocalOnly(item,
           type: type.value, section: 1);
-      // [my新增] 真实 bgm 条目: 类型变更同步到 bgm 账号 (源直连哈希条目
-      // 永不上传)。用户实测需求: 里番收藏页改分类应反映到 bgm
-      if (!CollectSectionRepair.isDirectSourceItem(item)) {
+      // [my新增] 类型变更同步 bgm: 真实 bgm 条目用自身 id; 源直连条目按
+      // adultBgmMap 映射寻址 (bgm 勾选收藏流入库)
+      final bgmId = _resolveBgmSyncId(item);
+      if (bgmId != null) {
         final token =
             GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken);
         if (token.trim().isNotEmpty) {
           try {
-            final ok = await BangumiApi.updateBangumiByType(
-                item.id, type.value);
+            final ok =
+                await BangumiApi.updateBangumiByType(bgmId, type.value);
             if (mounted && ok) {
               KazumiDialog.showToast(message: '已同步到 bgm (${type.label})');
             }

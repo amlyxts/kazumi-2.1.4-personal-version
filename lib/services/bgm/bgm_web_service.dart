@@ -14,6 +14,7 @@ import 'dart:typed_data';
 
 import 'package:kazumi/services/plugin/captcha_ocr_service.dart';
 import 'package:kazumi/services/logging/logger.dart';
+import 'package:kazumi/services/plugin/webview_page_fetch_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 class BgmWebSubject {
@@ -123,6 +124,9 @@ class BgmWebService {
   /// [核心] 使用前自动检查: cookie 空/失效 → 用存储的账号自动重登。
   /// 账号未配置时抛异常 (调用方引导填写)。返回可用 cookie。
   static Future<String> ensureCookie() async {
+    // [my方案] Windows 搜索走 WebView 共享登录会话, 无需 cookie;
+    // 自动登录 (webLogin) 被 bgm 指纹反爬封死, 保留给非 Windows
+    if (Platform.isWindows) return '';
     final cookie = _cookie;
     if (cookie.isNotEmpty) {
       try {
@@ -228,6 +232,8 @@ class BgmWebService {
       if (name == 'set-cookie') setCookies.add(value);
       if (name == 'location') location = value;
     }
+    KazumiLogger().i(
+        'BgmCurl: $method ${Uri.parse(url).host}${Uri.parse(url).path} -> $statusCode, ${bytes.length}B, redirects=${followRedirects ? "on" : "off"}, loc=${location ?? "-"}');
     return _BgmCurlResponse(
       statusCode: statusCode,
       setCookies: setCookies,
@@ -237,19 +243,32 @@ class BgmWebService {
     );
   }
 
-  /// 网页搜索: 返回候选条目 (id + 展示名)。空列表 = 无结果或 cookie 失效。
+  /// 网页搜索: 返回候选条目 (id + 展示名)。空列表 = 无结果或未登录。
+  ///
+  /// [my方案] Windows 走 app 内嵌 WebView 抓取: bgm 边缘按 TLS 指纹给
+  /// 降级会话 (curl/dart 带有效登录 cookie 也按未登录处理 — R18 过滤、
+  /// 登录 POST 恒拒, 2026-11-20 全链实测), WebView 与登录页共享
+  /// WebView2 用户数据目录 = 登录态 + 真指纹, nsfw 结果可见。
+  /// 其余平台回落 curl cookie 线。
   static Future<List<BgmWebSubject>> search(String keyword,
       {String? cookieOverride}) async {
-    final cookie = cookieOverride ?? _cookie;
-    if (cookie.isEmpty) {
-      throw Exception('bgm 网页 cookie 未配置 (设置→里番收藏→bgm 关联设置)');
-    }
     final encoded = Uri.encodeComponent(keyword);
-    final rs = await _curlRequest('GET',
-        'https://bgm.tv/subject_search/$encoded?cat=2',
-        cookie: cookie, followRedirects: true);
-    final html = rs.body;
+    final url = 'https://bgm.tv/subject_search/$encoded?cat=2';
+    String html;
+    if (Platform.isWindows) {
+      html = await WebviewPageFetchService.instance.fetchHtml(url);
+    } else {
+      final cookie = cookieOverride ?? _cookie;
+      if (cookie.isEmpty) {
+        throw Exception('bgm 网页 cookie 未配置 (设置→里番收藏→bgm 关联设置)');
+      }
+      final rs = await _curlRequest('GET', url,
+          cookie: cookie, followRedirects: true);
+      html = rs.body;
+    }
 
+    KazumiLogger().i(
+        'BgmWeb: parse ${html.length}B, containsItem=${html.contains('id="item_')}, containsLi=${html.contains('<li')}');
     // 单结果重定向: 最终落在条目页 (无 item 块, 有 nameSingle)
     if (!html.contains('id="item_')) {
       final single =
@@ -276,12 +295,29 @@ class BgmWebService {
           : html.length;
       final block = html.substring(start, end);
       final id = int.parse(itemSpans[i].group(1)!);
-      final title =
-          RegExp(r'<a[^>]*href="/subject/\d+"[^>]*title="([^"]*)"')
-                  .firstMatch(block)
-                  ?.group(1) ??
-              RegExp(r'<h3[^>]*>\s*<a[^>]*>([^<]+)</a>').firstMatch(block)?.group(1) ??
-              '';
+      // [my修复] 标题提取适配真实标记 (2026-11 实测 bgm 搜索结果块:
+      // 封面锚点无文字 + <a href class="l">标题</a>, 无 title 属性也无
+      // h3 — 原两种形状都不匹配, 全部条目被空标题丢弃 → 恒 0 条,
+      // 搜索线自上线从未真正工作过)
+      var title = '';
+      for (final a in RegExp(
+              r'<a[^>]*href="/subject/\d+"[^>]*>([^<]{2,120})</a>')
+          .allMatches(block)) {
+        final t = a.group(1)!.trim();
+        if (t.isNotEmpty) {
+          title = t;
+          break;
+        }
+      }
+      if (title.isEmpty) {
+        title = RegExp(r'<a[^>]*href="/subject/\d+"[^>]*title="([^"]*)"')
+                .firstMatch(block)
+                ?.group(1) ??
+            RegExp(r'<h3[^>]*>\s*<a[^>]*>([^<]+)</a>')
+                .firstMatch(block)
+                ?.group(1) ??
+            '';
+      }
       if (title.trim().isEmpty) continue;
       out.add(BgmWebSubject(id: id, name: title.trim()));
     }

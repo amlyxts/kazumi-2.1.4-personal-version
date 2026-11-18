@@ -260,8 +260,9 @@ class _AdultCollectPageState extends State<AdultCollectPage>
 
   final TextEditingController _bgmEmailController = TextEditingController();
   final TextEditingController _bgmPasswordController = TextEditingController();
-  // [my新增] 贴 ID 直连收藏输入
+  // [my新增] 贴 ID 直连收藏输入 + 手动 cookie 粘贴
   final TextEditingController _bgmIdController = TextEditingController();
+  final TextEditingController _bgmCookieController = TextEditingController();
   String _bgmMatchProgress = '';
 
   Future<void> _showBgmAssociate() async {
@@ -269,6 +270,8 @@ class _AdultCollectPageState extends State<AdultCollectPage>
         GStorage.getSetting(SettingsKeys.bgmAccountEmail).trim();
     _bgmPasswordController.text =
         GStorage.getSetting(SettingsKeys.bgmAccountPassword).trim();
+    _bgmCookieController.text =
+        GStorage.getSetting(SettingsKeys.bgmWebCookie).trim();
     await KazumiDialog.show(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
@@ -398,6 +401,36 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                       child: Text(_bgmMatchProgress,
                           style: const TextStyle(fontSize: 12)),
                     ),
+                  // [my新增] 手动 cookie 粘贴 — bgm 登录 POST 有指纹级
+                  // 反爬 (curl/dart 一律"验证码错误", 实机浏览器人工答案
+                  // 才放行), 自动登录保留为尽力而为; 浏览器 DevTools 复制
+                  // Cookie 头一次贴入即永久可用 (搜索只读, chii_auth 长效)
+                  const Divider(height: 20),
+                  const Text('手动贴 cookie (推荐, 免登录):',
+                      style: TextStyle(fontSize: 12)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _bgmCookieController,
+                    style: const TextStyle(fontSize: 11),
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                        hintText:
+                            '浏览器打开 bgm.tv 登录后: F12 → 网络 → 任一请求 → 请求标头 → 复制 Cookie: 整段值'),
+                  ),
+                  const SizedBox(height: 6),
+                  ElevatedButton(
+                    onPressed: () async {
+                      final c = _bgmCookieController.text.trim();
+                      if (c.isEmpty) {
+                        KazumiDialog.showToast(message: '请先粘贴 cookie');
+                        return;
+                      }
+                      await GStorage.putSetting(SettingsKeys.bgmWebCookie, c);
+                      BgmWebService.resetCookieOverride();
+                      KazumiDialog.showToast(message: 'cookie 已保存, 网页搜索立即可用');
+                    },
+                    child: const Text('保存 cookie'),
+                  ),
                   // [my新增] 贴 ID 直连收藏: 已知 bgm ID 时跳过搜索,
                   // 认证详情 → 选类型 → 写入 bgm 账号 + 本地里番区
                   const Divider(height: 20),

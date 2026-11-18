@@ -13,6 +13,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:kazumi/services/plugin/captcha_ocr_service.dart';
+import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
 class BgmWebSubject {
@@ -41,103 +42,82 @@ class BgmWebService {
   }
 
   /// 表单登录: GET /login (formhash + cookie jar) → POST /FollowTheRabbit。
-  /// 验证码触发时 (响应含可见 captcha 块): 抓验证码图 → OCR 识别 → 重试
-  /// (最多 3 轮, 每轮新验证码)。成功 = 302 且 Set-Cookie 含登录态。
+  /// bgm 2026-11 起登录必带验证码 (captcha_challenge_field 必填): 首轮
+  /// 裸 POST 必被 "验证码错误" 拒, 从失败响应页提取验证码图 src → OCR →
+  /// 重试 (最多 3 轮)。成功 = 302 且 Set-Cookie 含登录态。
   /// 返回完整 cookie 串; 失败抛异常 (信息含原因)。
   static Future<String> webLogin(String email, String password) async {
     final jar = <String, String>{};
     String cookieHeader() =>
         jar.entries.map((e) => '${e.key}=${e.value}').join('; ');
-    void eatCookies(HttpClientResponse rs) {
-      for (final set in rs.headers['set-cookie'] ?? const <String>[]) {
+    void eat(List<String> setCookies) {
+      for (final set in setCookies) {
         final pair = set.split(';').first;
         final i = pair.indexOf('=');
         if (i > 0) jar[pair.substring(0, i)] = pair.substring(i + 1);
       }
     }
 
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 12)
-      ..findProxy = (uri) =>
-          Platform.environment['KAZUMI_NO_CLASH'] == '1'
-              ? 'DIRECT'
-              : 'PROXY 127.0.0.1:7897';
-    client.userAgent =
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
-    try {
-      for (var attempt = 1; attempt <= 3; attempt++) {
-        // 1) GET /login: formhash + 会话 cookie + 验证码状态
-        final lreq = await client.getUrl(Uri.parse('https://bgm.tv/login'));
-        lreq.headers.set('Cookie', cookieHeader());
-        lreq.headers.set('Accept', 'text/html');
-        final lrs = await lreq.close().timeout(const Duration(seconds: 20));
-        eatCookies(lrs);
-        final loginHtml = await lrs
-            .transform(const Utf8Decoder(allowMalformed: true))
-            .join();
-        final formhash = RegExp(r'name="formhash"[^>]*value="([^"]*)"')
-                .firstMatch(loginHtml)
-                ?.group(1) ??
-            '';
-        // 验证码图片 (仅触发时可见): captcha_img 块内的 img
-        final capImg = RegExp(r'id="captcha_img".{0,300}?src="([^"]+)"',
-                dotAll: true)
-            .firstMatch(loginHtml)
-            ?.group(1);
-        String? captchaAnswer;
-        if (capImg != null && capImg.isNotEmpty) {
-          final imgUrl = capImg.startsWith('http')
-              ? capImg
-              : 'https://bgm.tv$capImg';
-          final ireq = await client.getUrl(Uri.parse(imgUrl));
-          ireq.headers.set('Cookie', cookieHeader());
-          final irs = await ireq.close().timeout(const Duration(seconds: 15));
-          final bytes = <int>[];
-          await for (final chunk in irs) {
-            bytes.addAll(chunk);
-          }
-          captchaAnswer = await CaptchaOcrService.solve(Uint8List.fromList(bytes));
-          if (captchaAnswer == null || captchaAnswer.trim().isEmpty) {
-            throw Exception('bgm 登录验证码识别失败 (检查 OCR 渠道配置)');
-          }
-          print('[bgm登录] 验证码 OCR → ${captchaAnswer.trim()}');
-          captchaAnswer = captchaAnswer.trim();
-        }
-        // 2) POST /FollowTheRabbit
-        final post =
-            await client.postUrl(Uri.parse('https://bgm.tv/FollowTheRabbit'));
-        post.followRedirects = false;
-        post.headers.set('Content-Type', 'application/x-www-form-urlencoded');
-        post.headers.set('Cookie', cookieHeader());
-        final fields = <String, String>{
-          'formhash': formhash,
-          'referer': '',
-          'dreferer': '',
-          'email': email,
-          'password': password,
-          'cookietime': '2592000',
-          'loginsubmit': '登录',
-        };
-        if (captchaAnswer != null) {
-          fields['captcha_challenge_field'] = captchaAnswer;
-        }
-        post.add(utf8.encode(fields.entries
-            .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
-            .join('&')));
-        final prs = await post.close().timeout(const Duration(seconds: 25));
-        eatCookies(prs);
-        // 成功 = 302 (且 Set-Cookie 发了记忆登录态)
-        if (prs.statusCode == 302 &&
-            (jar['chii_sec_id'] ?? '').isNotEmpty &&
-            !(jar['chii_sec_id'] ?? '').startsWith('deleted')) {
-          return cookieHeader();
-        }
-        print('[bgm登录] 第 $attempt 次未成功 (HTTP ${prs.statusCode})');
+    // [my发现] bgm 主 JS (min/g=js) 内 chiiLib.login.genCaptcha: 注入
+    // img src='/signup/captcha?<时间戳>' — 验证码图唯一来源; 服务端强制
+    // captcha_challenge_field (缺 = "验证码错误"), 每次登录都必须取图。
+    for (var attempt = 1; attempt <= 5; attempt++) {
+      // 1) GET /login: formhash + 会话 cookie
+      final lr = await _curlRequest('GET', 'https://bgm.tv/login',
+          cookie: cookieHeader());
+      eat(lr.setCookies);
+      final formhash = RegExp(r'name="formhash"[^>]*value="([^"]*)"')
+              .firstMatch(lr.body)
+              ?.group(1) ??
+          '';
+      if (formhash.isEmpty) {
+        throw Exception(
+            'bgm 登录页不可达 (HTTP ${lr.statusCode}, 疑似限流, 请稍后再试)');
       }
-      throw Exception('登录失败: 3 次尝试后仍被要求验证码或凭据被拒');
-    } finally {
-      client.close();
+      // 2) 取验证码图 → OCR (每轮新图)
+      final captchaUrl =
+          'https://bgm.tv/signup/captcha?${DateTime.now().millisecondsSinceEpoch}';
+      final ir = await _curlRequest('GET', captchaUrl, cookie: cookieHeader());
+      KazumiLogger().i(
+          'BgmLogin: captcha HTTP ${ir.statusCode} ${ir.bytes.length}B');
+      if (ir.statusCode != 200 || ir.bytes.isEmpty) {
+        throw Exception('bgm 验证码获取失败 (HTTP ${ir.statusCode})');
+      }
+      final captchaAnswer = await CaptchaOcrService.solve(ir.bytes);
+      KazumiLogger().i(
+          'BgmLogin: OCR result=${captchaAnswer == null ? "null" : captchaAnswer}');
+      if (captchaAnswer == null || captchaAnswer.trim().isEmpty) {
+        throw Exception('bgm 登录验证码识别失败 (检查 OCR 渠道配置)');
+      }
+      // 3) POST /FollowTheRabbit
+      final fields = <String, String>{
+        'formhash': formhash,
+        'referer': '',
+        'dreferer': '',
+        'email': email,
+        'password': password,
+        'captcha_challenge_field': captchaAnswer.trim(),
+        'cookietime': '2592000',
+        'loginsubmit': '登录',
+      };
+      final pr = await _curlRequest('POST', 'https://bgm.tv/FollowTheRabbit',
+          cookie: cookieHeader(), formFields: fields);
+      eat(pr.setCookies);
+      // 成功 = 302 (且 Set-Cookie 发了记忆登录态)
+      if (pr.statusCode == 302 &&
+          (jar['chii_sec_id'] ?? '').isNotEmpty &&
+          !(jar['chii_sec_id'] ?? '').startsWith('deleted')) {
+        return cookieHeader();
+      }
+      final errText = RegExp(
+              r'(验证码错误|密码错误|邮箱或密码|账号不存在|过于频繁|已停用|已删除)[^<]{0,40}')
+          .firstMatch(pr.body)
+          ?.group(0);
+      KazumiLogger().w(
+          'BgmLogin: attempt $attempt failed (HTTP ${pr.statusCode}) err=$errText');
     }
+    throw Exception(
+        '登录失败: 5 次尝试后仍未成功 (bgm 对非浏览器指纹强制验证码; 请改用手动贴 cookie: F12 → 网络 → 复制 Cookie 头)');
   }
 
   /// [核心] 使用前自动检查: cookie 空/失效 → 用存储的账号自动重登。
@@ -164,9 +144,98 @@ class BgmWebService {
 
   static String? _cookieOverride;
 
+  /// [my新增] 手动保存 cookie 后调用: 清内存 override, 下次读设置里的新值
+  static void resetCookieOverride() {
+    _cookieOverride = null;
+  }
+
   static String get _cookie =>
       _cookieOverride ??
       GStorage.getSetting(SettingsKeys.bgmWebCookie).trim();
+
+  // —— [my新增] curl 传输层 — bgm 边缘按 TLS/HTTP 指纹拦 dart 栈
+  // (实测同 UA/代理/参数: dart HttpClient 400, 系统 curl 200; 与
+  // direct_search 的 CF 拦截同型, 系统 curl 走 Schannel 指纹可过)。
+  static String? get _curlExe {
+    final root = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+    final exe = '$root\\System32\\curl.exe';
+    return File(exe).existsSync() ? exe : null;
+  }
+
+  static Directory? _curlWorkDir;
+
+  static Future<_BgmCurlResponse> _curlRequest(String method, String url,
+      {String cookie = '',
+      bool followRedirects = false,
+      Map<String, String>? formFields}) async {
+    final exe = _curlExe;
+    if (exe == null) {
+      throw Exception('curl.exe 不可用 — bgm 网页线依赖系统 curl 传输');
+    }
+    final tmp =
+        _curlWorkDir ??= await Directory.systemTemp.createTemp('kazumi-bgm-');
+    final headFile = '${tmp.path}${Platform.pathSeparator}h.txt';
+    final bodyFile = '${tmp.path}${Platform.pathSeparator}b.txt';
+    // 代理语义与原 dart 栈一致: 默认走 Clash, KAZUMI_NO_CLASH=1 直连
+    final proxy = Platform.environment['KAZUMI_NO_CLASH'] == '1'
+        ? null
+        : const ['--proxy', 'http://127.0.0.1:7897'];
+    final args = <String>[
+      '-s',
+      '--max-time',
+      '25',
+      '-D',
+      headFile,
+      '-o',
+      bodyFile,
+      ...?proxy,
+      '-A',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+      if (cookie.isNotEmpty) ...['-H', 'Cookie: $cookie'],
+      if (method == 'POST') ...[
+        '-X',
+        'POST',
+        '-H',
+        'Content-Type: application/x-www-form-urlencoded',
+        '--data-raw',
+        (formFields ?? const {}).entries
+            .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
+            .join('&'),
+      ],
+      if (followRedirects) '-L',
+      url,
+    ];
+    final r = await Process.run(exe, args);
+    if (r.exitCode != 0) {
+      throw Exception('curl 传输失败 (exit ${r.exitCode})');
+    }
+    final headText = await File(headFile).readAsString();
+    final bytes = await File(bodyFile).readAsBytes();
+    var statusCode = 0;
+    final setCookies = <String>[];
+    String? location;
+    for (final rawLine in headText.split('\n')) {
+      final line = rawLine.trim();
+      final m = RegExp(r'^HTTP/[\d.]+\s+(\d{3})').firstMatch(line);
+      if (m != null) {
+        statusCode = int.parse(m.group(1)!);
+        continue;
+      }
+      final i = line.indexOf(':');
+      if (i <= 0) continue;
+      final name = line.substring(0, i).toLowerCase();
+      final value = line.substring(i + 1).trim();
+      if (name == 'set-cookie') setCookies.add(value);
+      if (name == 'location') location = value;
+    }
+    return _BgmCurlResponse(
+      statusCode: statusCode,
+      setCookies: setCookies,
+      location: location,
+      body: utf8.decode(bytes, allowMalformed: true),
+      bytes: bytes,
+    );
+  }
 
   /// 网页搜索: 返回候选条目 (id + 展示名)。空列表 = 无结果或 cookie 失效。
   static Future<List<BgmWebSubject>> search(String keyword,
@@ -175,64 +244,48 @@ class BgmWebService {
     if (cookie.isEmpty) {
       throw Exception('bgm 网页 cookie 未配置 (设置→里番收藏→bgm 关联设置)');
     }
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 12)
-      ..findProxy = (uri) =>
-          Platform.environment['KAZUMI_NO_CLASH'] == '1'
-              ? 'DIRECT'
-              : 'PROXY 127.0.0.1:7897';
-    client.userAgent =
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
-    try {
-      final encoded = Uri.encodeComponent(keyword);
-      final rq = await client.getUrl(Uri.parse(
-          'https://bgm.tv/subject_search/$encoded?cat=2'));
-      rq.headers.set('Cookie', cookie);
-      rq.headers.set('Accept', 'text/html,application/xhtml+xml');
-      rq.followRedirects = true;
-      rq.maxRedirects = 5;
-      final rs = await rq.close().timeout(const Duration(seconds: 25));
-      final html = await rs.transform(const Utf8Decoder(allowMalformed: true)).join();
+    final encoded = Uri.encodeComponent(keyword);
+    final rs = await _curlRequest('GET',
+        'https://bgm.tv/subject_search/$encoded?cat=2',
+        cookie: cookie, followRedirects: true);
+    final html = rs.body;
 
-      // 单结果重定向: 最终落在条目页 (无 item 块, 有 nameSingle)
-      if (!html.contains('id="item_')) {
-        final single =
-            RegExp(r'class="nameSingle"[^>]*>.*?href="/subject/(\d+)"', dotAll: true)
-                .firstMatch(html);
-        if (single != null) {
-          final name =
-              RegExp(r'<h1[^>]*title="([^"]*)"').firstMatch(html)?.group(1) ??
-                  RegExp(r'<h1[^>]*>([^<]+)</h1>').firstMatch(html)?.group(1) ??
-                  '';
-          return [BgmWebSubject(id: int.parse(single.group(1)!), name: name)];
-        }
-        return const [];
-      }
-
-      // 多结果: 逐个 item 块解析
-      final out = <BgmWebSubject>[];
-      final itemSpans =
-          RegExp(r'<li id="item_(\d+)"').allMatches(html).toList();
-      for (var i = 0; i < itemSpans.length; i++) {
-        final start = itemSpans[i].end;
-        final end = i + 1 < itemSpans.length
-            ? itemSpans[i + 1].start
-            : html.length;
-        final block = html.substring(start, end);
-        final id = int.parse(itemSpans[i].group(1)!);
-        final title =
-            RegExp(r'<a[^>]*href="/subject/\d+"[^>]*title="([^"]*)"')
-                    .firstMatch(block)
-                    ?.group(1) ??
-                RegExp(r'<h3[^>]*>\s*<a[^>]*>([^<]+)</a>').firstMatch(block)?.group(1) ??
+    // 单结果重定向: 最终落在条目页 (无 item 块, 有 nameSingle)
+    if (!html.contains('id="item_')) {
+      final single =
+          RegExp(r'class="nameSingle"[^>]*>.*?href="/subject/(\d+)"', dotAll: true)
+              .firstMatch(html);
+      if (single != null) {
+        final name =
+            RegExp(r'<h1[^>]*title="([^"]*)"').firstMatch(html)?.group(1) ??
+                RegExp(r'<h1[^>]*>([^<]+)</h1>').firstMatch(html)?.group(1) ??
                 '';
-        if (title.trim().isEmpty) continue;
-        out.add(BgmWebSubject(id: id, name: title.trim()));
+        return [BgmWebSubject(id: int.parse(single.group(1)!), name: name)];
       }
-      return out;
-    } finally {
-      client.close();
+      return const [];
     }
+
+    // 多结果: 逐个 item 块解析
+    final out = <BgmWebSubject>[];
+    final itemSpans =
+        RegExp(r'<li id="item_(\d+)"').allMatches(html).toList();
+    for (var i = 0; i < itemSpans.length; i++) {
+      final start = itemSpans[i].end;
+      final end = i + 1 < itemSpans.length
+          ? itemSpans[i + 1].start
+          : html.length;
+      final block = html.substring(start, end);
+      final id = int.parse(itemSpans[i].group(1)!);
+      final title =
+          RegExp(r'<a[^>]*href="/subject/\d+"[^>]*title="([^"]*)"')
+                  .firstMatch(block)
+                  ?.group(1) ??
+              RegExp(r'<h3[^>]*>\s*<a[^>]*>([^<]+)</a>').firstMatch(block)?.group(1) ??
+              '';
+      if (title.trim().isEmpty) continue;
+      out.add(BgmWebSubject(id: id, name: title.trim()));
+    }
+    return out;
   }
 
   // —— 里番 bgm 关联映射 (JSON 持久: 收藏键 → 元数据) ——
@@ -284,4 +337,21 @@ class BgmWebService {
     m.remove(collectKey);
     saveMap();
   }
+}
+
+/// curl 请求结果 (状态码 + set-cookie 列表 + 二进制体)
+class _BgmCurlResponse {
+  _BgmCurlResponse({
+    required this.statusCode,
+    required this.setCookies,
+    required this.location,
+    required this.body,
+    required this.bytes,
+  });
+
+  final int statusCode;
+  final List<String> setCookies;
+  final String? location;
+  final String body;
+  final Uint8List bytes;
 }

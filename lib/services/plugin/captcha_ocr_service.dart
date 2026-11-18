@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:image/image.dart' as img;
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -113,7 +114,18 @@ class CaptchaOcrService {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
   static const _prompt =
-      '识别图中验证码, 验证码为4位字符, 仅由数字0-9和英文字母组成。只输出这4个字符, 不要任何其他内容';
+      '识别图中验证码, 验证码为4到6位字符, 仅由数字0-9和英文字母组成。只输出这些字符, 不要任何其他内容';
+
+  /// [my新增] 按魔数识别图片 MIME — bgm 验证码是 GIF, 硬编码 image/png
+  /// 会被视觉模型 API 400 拒收 (实测 open.bigmodel.cn)
+  static String _mimeOf(Uint8List b) {
+    if (b.length >= 3 && b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) {
+      return 'image/gif';
+    }
+    if (b.length >= 2 && b[0] == 0x89 && b[1] == 0x50) return 'image/png';
+    if (b.length >= 2 && b[0] == 0xFF && b[1] == 0xD8) return 'image/jpeg';
+    return 'image/png';
+  }
 
   /// 内置种子模板: 用户未自定义时的渠道列表 (key 为空, 填上即用)
   static List<OcrChannelConfig> defaultChannels() => [
@@ -190,7 +202,19 @@ class CaptchaOcrService {
   /// 识别验证码图片, 返回 4 位字母数字码; 全渠道失败返回 null。
   /// 渠道按列表顺序 (粘性优先), 渠道内模型按配置顺序轮询。
   static Future<String?> solve(Uint8List imageBytes) async {
-    final imgB64 = base64Encode(imageBytes);
+    var mime = _mimeOf(imageBytes);
+    var bytes = imageBytes;
+    if (mime == 'image/gif') {
+      // GLM-4V 等视觉模型不收 GIF (400): 首帧转 PNG
+      try {
+        final decoded = img.decodeImage(imageBytes);
+        if (decoded != null) {
+          bytes = Uint8List.fromList(img.encodePng(decoded));
+          mime = 'image/png';
+        }
+      } catch (_) {}
+    }
+    final imgB64 = base64Encode(bytes);
     final channels = loadChannels()..removeWhere((c) => c.apiKey.isEmpty);
     final sticky = _lastSuccessChannelName;
     if (sticky != null) {
@@ -203,7 +227,7 @@ class CaptchaOcrService {
       for (final model in channel.models) {
         try {
           final code = _sanitize(
-              await _request(channel, model, imgB64)
+              await _request(channel, model, imgB64, mime)
                   .timeout(const Duration(seconds: 30)));
           if (code != null) {
             _lastSuccessChannelName = channel.name;
@@ -222,11 +246,11 @@ class CaptchaOcrService {
 
   static String? _sanitize(String raw) {
     final code = raw.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
-    return code.length == 4 ? code : null;
+    return (code.length >= 4 && code.length <= 6) ? code : null;
   }
 
-  static Future<String> _request(
-      OcrChannelConfig channel, OcrModelConfig model, String imgB64) async {
+  static Future<String> _request(OcrChannelConfig channel,
+      OcrModelConfig model, String imgB64, String mime) async {
     final body = <String, dynamic>{
       'model': model.model,
       'max_tokens': model.maxTokens,
@@ -237,7 +261,7 @@ class CaptchaOcrService {
             {'type': 'text', 'text': _prompt},
             {
               'type': 'image_url',
-              'image_url': {'url': 'data:image/png;base64,$imgB64'},
+              'image_url': {'url': 'data:$mime;base64,$imgB64'},
             },
           ],
         },

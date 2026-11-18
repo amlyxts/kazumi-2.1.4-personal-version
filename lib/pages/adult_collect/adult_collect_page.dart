@@ -350,16 +350,27 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                               var synced = 0;
                               final token = GStorage.getSetting<String>(
                                   SettingsKeys.bangumiAccessToken);
+                              var idx = 0;
                               for (final c in unmapped) {
+                                idx++;
                                 final key =
                                     c.bangumiItem.id.toString();
                                 final title = c.bangumiItem.nameCn
                                         .isNotEmpty
                                     ? c.bangumiItem.nameCn
                                     : c.bangumiItem.name;
+                                // [my新增] 条目间限速间隔 — bgm 网页
+                                // 搜索连发会触发限流 (首轮实测第 2 条起
+                                // 全失败)
+                                if (idx > 1) {
+                                  await Future<void>.delayed(
+                                      const Duration(milliseconds: 1500));
+                                }
                                 try {
                                   final cands = await BgmWebService.search(
                                       title);
+                                  KazumiLogger().i(
+                                      'BgmMatch #$idx: "$title" -> ${cands.length} candidates');
                                   BgmWebSubject? best;
                                   var bestScore = 0.0;
                                   for (final cand in cands) {
@@ -373,6 +384,8 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                                       best = cand;
                                     }
                                   }
+                                  KazumiLogger().i(
+                                      'BgmMatch #$idx: best=${best?.id} score=${bestScore.toStringAsFixed(2)}');
                                   if (best != null && bestScore >= 0.5) {
                                     // [my修复] 认证直取: nsfw 条目未认证
                                     // 一律 404, 非认证通道永远关联不上
@@ -394,6 +407,8 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                                           final ok = await BangumiApi
                                               .updateBangumiByType(
                                                   best.id, c.type);
+                                          KazumiLogger().i(
+                                              'BgmMatch #$idx: POST id=${best.id} ok=$ok');
                                           if (ok) synced++;
                                         } catch (_) {}
                                       }

@@ -414,7 +414,11 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                                       }
                                     }
                                   }
-                                } catch (_) {}
+                                } catch (e) {
+                                  KazumiLogger().w(
+                                      'BgmMatch #$idx: entry failed "$title"',
+                                      error: e);
+                                }
                                 setDialogState(() => _bgmMatchProgress =
                                     '匹配并同步中… 关联$done/同步$synced / 共${unmapped.length} (${c.bangumiItem.nameCn})');
                               }

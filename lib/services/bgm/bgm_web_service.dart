@@ -256,7 +256,15 @@ class BgmWebService {
     final url = 'https://bgm.tv/subject_search/$encoded?cat=2';
     String html;
     if (Platform.isWindows) {
-      html = await WebviewPageFetchService.instance.fetchHtml(url);
+      try {
+        html = await WebviewPageFetchService.instance.fetchHtml(url);
+        KazumiLogger().i(
+            'BgmWeb: webview fetch ok -> ${html.length}B');
+      } catch (e) {
+        KazumiLogger().w(
+            'BgmWeb: webview fetch FAILED $url', error: e);
+        rethrow;
+      }
     } else {
       final cookie = cookieOverride ?? _cookie;
       if (cookie.isEmpty) {

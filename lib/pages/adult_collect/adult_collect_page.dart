@@ -376,12 +376,19 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                                       'BgmMatch #$idx: "$title" -> ${cands.length} candidates');
                                   BgmWebSubject? best;
                                   var bestScore = 0.0;
+                                  final cleanTitle =
+                                      BgmWebService.cleanSearchTitle(title);
                                   for (final cand in cands) {
+                                    // [my新增] 清洗后标题也参与对比 (尾
+                                    // 集数剥除后与系列级条目名对齐)
                                     final s1 = SkipTimeService.similarity(
                                         title, cand.name);
                                     final s2 = SkipTimeService.similarity(
                                         c.bangumiItem.nameCn, cand.name);
-                                    final sc = s1 > s2 ? s1 : s2;
+                                    final s3 = SkipTimeService.similarity(
+                                        cleanTitle, cand.name);
+                                    final sc = [s1, s2, s3]
+                                        .reduce((a, b) => a > b ? a : b);
                                     if (sc > bestScore) {
                                       bestScore = sc;
                                       best = cand;

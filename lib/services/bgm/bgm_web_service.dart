@@ -250,8 +250,15 @@ class BgmWebService {
   /// 登录 POST 恒拒, 2026-11-20 全链实测), WebView 与登录页共享
   /// WebView2 用户数据目录 = 登录态 + 真指纹, nsfw 结果可见。
   /// 其余平台回落 curl cookie 线。
+  /// [my新增] bgm 搜索词清洗: 剥裸尾集数 ("櫻春女學院的男優 1" →
+  /// "櫻春女學院的男優") — bgm 条目是系列级 (无集数), 尾数字既拖累
+  /// 搜索命中率也拉低相似度。用户实测反馈的 7 条失败里 4 条此模式。
+  static String cleanSearchTitle(String raw) =>
+      raw.replaceFirst(RegExp(r'[\s　]+\d+$'), '').trim();
+
   static Future<List<BgmWebSubject>> search(String keyword,
       {String? cookieOverride}) async {
+    keyword = cleanSearchTitle(keyword);
     final encoded = Uri.encodeComponent(keyword);
     final url = 'https://bgm.tv/subject_search/$encoded?cat=2';
     String html;

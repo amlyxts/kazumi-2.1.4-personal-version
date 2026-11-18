@@ -1163,7 +1163,6 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       KazumiDialog.showToast(message: 'bgm 收藏失败: ${e.toString()}');
     }
   }
-  }
 
   /// [my新增] 收藏即作品 (混合方案, 依据 T1 实测): 先走现成取集链路
   /// 拿观看页播放列表, 按"相邻标题公共前缀相似度"判定系列/单集 —

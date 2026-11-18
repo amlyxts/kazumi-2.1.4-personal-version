@@ -86,7 +86,15 @@ class AssetsSyncService {
     if (controller == null) return;
     try {
       await webDav.syncPlugins(
-        merge: (remoteJson) async => controller.exportPluginsJson(),
+        // [my修复] 推送也走并集 (本地 ∪ 云端): 原实现"本地为准"直接覆盖
+        // 云端, 插件少的设备 (实测 iOS 新装 1 条) 会 stom 掉多的 (PC 54 条),
+        // 之后所有设备拉取都拿不到全量。并集后删除不再跨设备传播 (取舍记录
+        // 在案: 插件删除属低频操作, 各设备独立删即可)。
+        merge: (remoteJson) async {
+          final localJson = controller.exportPluginsJson();
+          final merged = controller.mergePluginsJson(localJson, remoteJson);
+          return merged.json;
+        },
         export: () => controller.exportPluginsJson(),
       );
     } catch (e) {

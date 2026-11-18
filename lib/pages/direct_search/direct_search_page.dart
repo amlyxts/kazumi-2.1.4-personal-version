@@ -1072,8 +1072,11 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     try {
       // [my修复] cookie 线入口必须 ensureCookie: 空/失效自动用已存账号
       // 重登 (含 OCR 验证码兜底); 此前裸调 search, 新会话必报 cookie 未配置
+      KazumiLogger().i('BgmCollect: flow start, title=$title');
       await BgmWebService.ensureCookie();
+      KazumiLogger().i('BgmCollect: cookie ready');
       final cands = await BgmWebService.search(title);
+      KazumiLogger().i('BgmCollect: search done, ${cands.length} candidates');
       if (cands.isEmpty) {
         KazumiDialog.showToast(message: 'bgm 网页搜索无结果 (cookie 失效也是此表现)');
         return;
@@ -1121,18 +1124,22 @@ class _DirectSearchPageState extends State<DirectSearchPage>
       );
       if (confirmed != true || picked == null) return;
       final bgmId = picked!;
+      KazumiLogger().i('BgmCollect: picked id=$bgmId');
       // 认证详情: 存在性确认 (nsfw 未认证 404), 也是写入前的兜底校验
       final info = await BangumiApi.getBangumiInfoByIDAuth(bgmId);
       if (info == null) {
+        KazumiLogger().w('BgmCollect: auth detail failed, id=$bgmId');
         KazumiDialog.showToast(message: 'bgm 条目详情获取失败 (ID $bgmId)');
         return;
       }
       final ok = await BangumiApi.updateBangumiByType(bgmId, appType);
+      KazumiLogger().i('BgmCollect: POST result=$ok, id=$bgmId');
       KazumiDialog.showToast(
           message: ok
               ? '已收藏到 bgm 账号 (ID $bgmId · ${info.name})'
               : 'bgm 收藏写入失败, 请稍后重试');
     } catch (e) {
+      KazumiLogger().w('BgmCollect: flow failed', error: e);
       KazumiDialog.showToast(message: 'bgm 收藏失败: ${e.toString()}');
     }
   }

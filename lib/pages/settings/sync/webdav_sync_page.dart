@@ -9,6 +9,7 @@ import 'package:kazumi/pages/settings/sync/sync_settings_widgets.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/sync/webdav.dart';
+import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/sync/danmaku_shield_sync_service.dart';
 
 class WebDavSyncPage extends StatefulWidget {
@@ -60,6 +61,37 @@ class _WebDavSyncPageState extends State<WebDavSyncPage> {
         if (mounted) setState(() => _message = '正在同步观看记录…');
         await webDav.syncHistory();
         _message = '观看记录已同步';
+      });
+
+  /// [my新增] 手动插件列表同步 (并集合并, 错误屏显) — 启动自动拉取之外的
+  /// 即时通道; iOS 静默失败的可见化诊断入口。
+  Future<void> _syncPlugins() => _run(() async {
+        final webDav = WebDav();
+        if (!webDav.initialized) {
+          await webDav.init();
+        } else if (!webDav.isPluginSyncEnabled) {
+          await webDav.ping();
+        }
+        if (mounted) setState(() => _message = '正在同步插件列表…');
+        final controller = inject<PluginsController>();
+        var imported = 0;
+        await webDav.syncPlugins(
+          merge: (remoteJson) async {
+            final localJson = controller.exportPluginsJson();
+            final merged = controller.mergePluginsJson(localJson, remoteJson);
+            imported = merged.imported;
+            if (merged.imported > 0) {
+              await controller.importPluginsJson(merged.json);
+              KazumiLogger().i(
+                  'WebDAV: plugins manual sync imported ${merged.imported}');
+            }
+            return merged.json;
+          },
+          export: () => controller.exportPluginsJson(),
+        );
+        _message = imported > 0
+            ? '插件列表已同步 (新导入 $imported 个)'
+            : '插件列表已同步 (云端无新增)';
       });
 
   Future<void> _configure() async {
@@ -260,6 +292,12 @@ class _WebDavSyncPageState extends State<WebDavSyncPage> {
               onPressed:
                   enabled && shield && !_busy ? _syncDanmakuShield : null,
               text: '立即同步弹幕屏蔽词',
+              icon: Icons.sync_rounded,
+            ),
+            StateActionButton.tonal(
+              onPressed:
+                  enabled && pluginSync && !_busy ? _syncPlugins : null,
+              text: '立即同步插件列表',
               icon: Icons.sync_rounded,
             ),
             if (_message != null)

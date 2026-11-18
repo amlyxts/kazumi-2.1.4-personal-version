@@ -75,6 +75,7 @@ Future<void> main() async {
       final rs = await rq.close().timeout(const Duration(seconds: 25));
       final text = await rs.transform(utf8.decoder).join();
       print('CLOUD plugins.json: HTTP ${rs.statusCode} | ${text.length}B');
+      print('Last-Modified: ${rs.headers.value('last-modified') ?? '?'}');
       if (rs.statusCode != 200) {
         print('CLOUD 异常, 终止');
         client.close();
@@ -101,6 +102,11 @@ Future<void> main() async {
           ' | 云端 ' + cloudList.length.toString() +
           ' | 云端独有: ' + cloudList.difference(localList).toList().toString());
       final merged = jsonDecode(localRaw);
+      // [探针] zzprobe 字段: iOS 拉取→导入→重传 会剥掉未知字段;
+      // 字段仍在 = iOS 未触碰云端 (差分判定)
+      for (final e in (merged as List)) {
+        (e as Map)['zzprobe'] = 'v1';
+      }
       try {
         final cd = jsonDecode(text);
         final src = cd is Map ? (cd['plugins'] ?? cd) : cd;

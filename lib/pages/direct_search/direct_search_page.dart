@@ -1042,11 +1042,12 @@ class _DirectSearchPageState extends State<DirectSearchPage>
                   // 弹窗打开期间可能刚完成认领, 条目 id 会从哈希变真实条目,
                   // 现取现用避免旧 id 进本地库
                   KazumiDialog.dismiss();
-                  unawaited(_collectAsSeries(card, _fabricatedItem(card), type));
-                  // [my新增] bgm 账号同步 (独立于本地收藏, 失败不回滚本地)
+                  // [my重构] 勾选 bgm 同步时: 先 bgm 候选选择, 后本地收藏
+                  // + POST (原顺序是先本地后弹候选, 逻辑颠倒)
                   if (alsoSyncBgm) {
-                    unawaited(_collectToBangumi(
-                        SeriesDetector.namingName(card.title), type));
+                    unawaited(_collectWithBgmFlow(card, type));
+                  } else {
+                    unawaited(_collectAsSeries(card, _fabricatedItem(card), type));
                   }
                 },
                 child: const Text('确定'),
@@ -1058,28 +1059,30 @@ class _DirectSearchPageState extends State<DirectSearchPage>
     );
   }
 
-  /// [my新增] bgm 账号收藏: cookie 网页搜索拿候选 (nsfw 条目 API 搜索被
-  /// bgm 屏蔽, 网页端可查) → 用户选 ID → 认证详情存在性确认 → POST 写入
-  /// bgm 账号 (收藏端点对 nsfw 实测 202 放行)。独立于本地收藏链路, 失败
-  /// 不回滚本地。
-  Future<void> _collectToBangumi(String title, int appType) async {
-    // token 预检: 无 token 时认证详情 404 / POST 401, 提前引导
-    final token = GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken);
-    if (token.trim().isEmpty) {
-      KazumiDialog.showToast(message: '请先登录 bangumi 账号 (我的 → bangumi)');
-      return;
-    }
+  /// [my新增] bgm 勾选收藏流 (顺序按用户要求: 先 bgm 判断/候选选择,
+  /// 后本地收藏): 弹候选选 ID → 本地收藏 (原 _collectAsSeries 链) →
+  /// POST 写入 bgm 账号。候选取消/搜索失败 = 仅本地收藏, 不拦本地。
+  Future<void> _collectWithBgmFlow(_BrowseCard card, int appType) async {
+    KazumiLogger().i('BgmCollect: flow start, title=${card.title}');
+    final bgmId = await _pickBgmId(SeriesDetector.namingName(card.title));
+    // 本地收藏 (无论 bgm 是否选到)
+    await _collectAsSeries(card, _fabricatedItem(card), appType);
+    if (bgmId == null) return;
+    await _postBgmCollect(bgmId, appType);
+  }
+
+  /// [my新增] bgm 候选选择: cookie 网页搜索拿候选 (nsfw 条目 API 搜索被
+  /// bgm 屏蔽, 网页端可查) → 用户选 ID。返回 null = 取消/无结果/失败。
+  Future<int?> _pickBgmId(String title) async {
     try {
-      // [my修复] cookie 线入口必须 ensureCookie: 空/失效自动用已存账号
-      // 重登 (含 OCR 验证码兜底); 此前裸调 search, 新会话必报 cookie 未配置
-      KazumiLogger().i('BgmCollect: flow start, title=$title');
+      // Windows: ensureCookie 直通 (搜索走 WebView 共享登录会话)
       await BgmWebService.ensureCookie();
       KazumiLogger().i('BgmCollect: cookie ready');
       final cands = await BgmWebService.search(title);
       KazumiLogger().i('BgmCollect: search done, ${cands.length} candidates');
       if (cands.isEmpty) {
-        KazumiDialog.showToast(message: 'bgm 网页搜索无结果 (cookie 失效也是此表现)');
-        return;
+        KazumiDialog.showToast(message: 'bgm 网页搜索无结果, 已仅收藏本地');
+        return null;
       }
       final shown = cands.take(30).toList();
       int? picked = shown.length == 1 ? shown.first.id : null;
@@ -1122,9 +1125,26 @@ class _DirectSearchPageState extends State<DirectSearchPage>
           ),
         ),
       );
-      if (confirmed != true || picked == null) return;
-      final bgmId = picked!;
-      KazumiLogger().i('BgmCollect: picked id=$bgmId');
+      if (confirmed != true || picked == null) return null;
+      KazumiLogger().i('BgmCollect: picked id=$picked');
+      return picked;
+    } catch (e) {
+      KazumiLogger().w('BgmCollect: pick failed', error: e);
+      KazumiDialog.showToast(message: 'bgm 搜索失败: ${e.toString()} (已仅收藏本地)');
+      return null;
+    }
+  }
+
+  /// [my新增] bgm 收藏写入: 认证详情存在性确认 → POST (收藏端点对 nsfw
+  /// 实测 202 放行)。
+  Future<void> _postBgmCollect(int bgmId, int appType) async {
+    // token 预检: 无 token 时认证详情 404 / POST 401, 提前引导
+    final token = GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken);
+    if (token.trim().isEmpty) {
+      KazumiDialog.showToast(message: '请先登录 bangumi 账号 (我的 → bangumi)');
+      return;
+    }
+    try {
       // 认证详情: 存在性确认 (nsfw 未认证 404), 也是写入前的兜底校验
       final info = await BangumiApi.getBangumiInfoByIDAuth(bgmId);
       if (info == null) {
@@ -1139,9 +1159,10 @@ class _DirectSearchPageState extends State<DirectSearchPage>
               ? '已收藏到 bgm 账号 (ID $bgmId · ${info.name})'
               : 'bgm 收藏写入失败, 请稍后重试');
     } catch (e) {
-      KazumiLogger().w('BgmCollect: flow failed', error: e);
+      KazumiLogger().w('BgmCollect: post failed', error: e);
       KazumiDialog.showToast(message: 'bgm 收藏失败: ${e.toString()}');
     }
+  }
   }
 
   /// [my新增] 收藏即作品 (混合方案, 依据 T1 实测): 先走现成取集链路

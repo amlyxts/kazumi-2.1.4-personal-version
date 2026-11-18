@@ -509,6 +509,12 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                   // 反爬 (curl/dart 一律"验证码错误", 实机浏览器人工答案
                   // 才放行), 自动登录保留为尽力而为; 浏览器 DevTools 复制
                   // Cookie 头一次贴入即永久可用 (搜索只读, chii_auth 长效)
+                  const SizedBox(height: 6),
+                  // [my新增] 按映射合并/去角标 — 纯本地清理存量旧格式
+                  ElevatedButton(
+                    onPressed: _mergeByBgmMap,
+                    child: const Text('按映射合并同作品 / 去角标'),
+                  ),
                   const Divider(height: 20),
                   const Text('手动贴 cookie (推荐, 免登录):',
                       style: TextStyle(fontSize: 12)),
@@ -692,6 +698,71 @@ class _AdultCollectPageState extends State<AdultCollectPage>
     } catch (e) {
       KazumiDialog.showToast(message: 'bgm 收藏失败: ${e.toString()}');
     }
+  }
+
+  /// [my新增] 按 bgm 映射合并同作品 + 去角标 (纯本地, 不查章节):
+  /// 作品化迁移依赖章节列表, 网络挂时留旧格式 (实测 16 次迁移失败=
+  /// HanimeOne 章节查询连接错误) → 裸尾集数条目带角标滞留。bgm 映射
+  /// 已把"同一作品的多个单集条目"指向同一 bgm 条目, 直接按组:
+  /// - 组内多条 → 保留最早收藏的一条 (类型/时间沿用), 其余删除+解除映射
+  /// - 保留条目名带裸尾集数 (角标源) → 改名为 bgm 中文名
+  /// - 单条带角标且已映射 → 改名
+  Future<void> _mergeByBgmMap() async {
+    final map = BgmWebService.loadMap();
+    if (map.isEmpty) {
+      KazumiDialog.showToast(message: '暂无 bgm 映射, 先跑自动匹配并同步');
+      return;
+    }
+    final entries = _collectController.collectibles
+        .where((c) => c.section == 1)
+        .toList();
+    final byBgm = <int, List<CollectedBangumi>>{};
+    for (final c in entries) {
+      final id = _resolveBgmSyncId(c.bangumiItem);
+      if (id != null) byBgm.putIfAbsent(id, () => []).add(c);
+    }
+    var merged = 0, renamed = 0;
+    final hasBareTail = RegExp(r'[\s　]+\d+$');
+    for (final e in byBgm.entries) {
+      final m = map.values.firstWhere(
+          (v) => (v['bgmId'] as num?)?.toInt() == e.key,
+          orElse: () => const {});
+      final bgmName = ((m['nameCn'] as String?) ?? '').isNotEmpty
+          ? m['nameCn'] as String
+          : (m['name'] as String? ?? '');
+      if (bgmName.isEmpty) continue;
+      final list = e.value;
+      CollectedBangumi keep;
+      if (list.length > 1) {
+        list.sort((a, b) => a.time.compareTo(b.time));
+        keep = list.first;
+        for (final c in list.skip(1)) {
+          await _collectController.deleteCollectLocalOnly(c.bangumiItem);
+          BgmWebService.removeAssociation(c.bangumiItem.id.toString());
+          merged++;
+        }
+      } else {
+        keep = list.first;
+      }
+      if (hasBareTail.hasMatch(keep.bangumiItem.name.trim()) &&
+          keep.bangumiItem.name != bgmName) {
+        final old = keep.bangumiItem;
+        final item = BangumiItem(
+          id: old.id, type: old.type, name: bgmName, nameCn: bgmName,
+          summary: old.summary, airDate: old.airDate,
+          airWeekday: old.airWeekday, rank: old.rank, images: old.images,
+          tags: old.tags, alias: old.alias, ratingScore: old.ratingScore,
+          votes: old.votes, votesCount: old.votesCount, info: old.info,
+          metaTags: old.metaTags, interest: old.interest,
+        );
+        await GStorage.putCollectible(
+            CollectedBangumi(item, keep.time, keep.type, section: 1));
+        renamed++;
+      }
+    }
+    _collectController.loadCollectibles();
+    if (mounted) setState(() {});
+    KazumiDialog.showToast(message: '按映射合并 $merged 条, 去角标改名 $renamed 条');
   }
 
   /// [my新增] 解析 bgm 同步目标 id: 真实 bgm 条目用自身 id; 源直连条目

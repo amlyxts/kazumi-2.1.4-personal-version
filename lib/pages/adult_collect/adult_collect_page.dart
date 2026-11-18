@@ -263,8 +263,7 @@ class _AdultCollectPageState extends State<AdultCollectPage>
 
   final TextEditingController _bgmEmailController = TextEditingController();
   final TextEditingController _bgmPasswordController = TextEditingController();
-  // [my新增] 贴 ID 直连收藏输入 + 手动 cookie 粘贴
-  final TextEditingController _bgmIdController = TextEditingController();
+  // [my新增] 手动 cookie 粘贴
   final TextEditingController _bgmCookieController = TextEditingController();
   String _bgmMatchProgress = '';
 
@@ -558,28 +557,6 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                       },
                       child: const Text('浏览器登录自动取'),
                     ),
-                  // [my新增] 贴 ID 直连收藏: 已知 bgm ID 时跳过搜索,
-                  // 认证详情 → 选类型 → 写入 bgm 账号 + 本地里番区
-                  const Divider(height: 20),
-                  const Text('贴 ID 收藏到 bgm (需已登录 bangumi):',
-                      style: TextStyle(fontSize: 12)),
-                  const SizedBox(height: 6),
-                  Row(children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _bgmIdController,
-                        keyboardType: TextInputType.number,
-                        style: const TextStyle(fontSize: 12),
-                        decoration: const InputDecoration(
-                            hintText: 'bgm 条目 ID (纯数字)'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    ElevatedButton(
-                      onPressed: _submitBgmIdCollect,
-                      child: const Text('查详情收藏'),
-                    ),
-                  ]),
                   const Divider(height: 20),
                   const Text('已关联:', style: TextStyle(fontSize: 12)),
                   SizedBox(
@@ -627,77 +604,6 @@ class _AdultCollectPageState extends State<AdultCollectPage>
         },
       ),
     );
-  }
-
-  /// [my新增] 贴 ID 直连收藏: 认证详情 (nsfw 未认证 404) → 类型选择 →
-  /// POST 写入 bgm 账号 (收藏端点对 nsfw 实测 202 放行) → 本地入里番区
-  /// (真实 bgm 条目无直连播放地址, 点卡片有引导提示)。
-  Future<void> _submitBgmIdCollect() async {
-    final id = int.tryParse(_bgmIdController.text.trim());
-    if (id == null || id <= 0) {
-      KazumiDialog.showToast(message: '请输入有效的 bgm 条目 ID');
-      return;
-    }
-    try {
-      final info = await BangumiApi.getBangumiInfoByIDAuth(id);
-      if (info == null) {
-        KazumiDialog.showToast(message: '详情获取失败 (未登录 bangumi 或 ID 不存在)');
-        return;
-      }
-      int selectedType = CollectType.planToWatch.value;
-      final confirmed = await KazumiDialog.show<bool>(
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text(
-                info.nameCn.isNotEmpty ? info.nameCn : info.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 16)),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final t in [
-                  CollectType.planToWatch,
-                  CollectType.watched,
-                  CollectType.watching,
-                  CollectType.onHold,
-                  CollectType.abandoned,
-                ])
-                  RadioListTile<int>(
-                    value: t.value,
-                    groupValue: selectedType,
-                    title: Text(t.label),
-                    dense: true,
-                    onChanged: (v) =>
-                        setDialogState(() => selectedType = v ?? selectedType),
-                  ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: KazumiDialog.dismiss,
-                child: const Text('取消'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('收藏'),
-              ),
-            ],
-          ),
-        ),
-      );
-      if (confirmed != true) return;
-      final ok = await BangumiApi.updateBangumiByType(id, selectedType);
-      if (!ok) {
-        KazumiDialog.showToast(message: 'bgm 收藏写入失败, 请稍后重试');
-        return;
-      }
-      await _collectController.addCollectLocalOnly(info,
-          type: selectedType, section: 1);
-      KazumiDialog.showToast(message: '已收藏到 bgm 并入里番区 (ID $id)');
-    } catch (e) {
-      KazumiDialog.showToast(message: 'bgm 收藏失败: ${e.toString()}');
-    }
   }
 
   /// [my新增] 按 bgm 映射合并同作品 + 去角标 (纯本地, 不查章节):

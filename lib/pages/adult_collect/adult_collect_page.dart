@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
@@ -12,6 +13,7 @@ import 'package:kazumi/modules/collect/collect_module.dart';
 import 'package:kazumi/modules/collect/collect_repair.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/services/bgm/bgm_web_service.dart';
+import 'package:kazumi/pages/adult_collect/bgm_login_webview_page.dart';
 import 'package:kazumi/services/skip/skip_time_service.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/pages/direct_search/series_detector.dart';
@@ -431,6 +433,23 @@ class _AdultCollectPageState extends State<AdultCollectPage>
                     },
                     child: const Text('保存 cookie'),
                   ),
+                  const SizedBox(width: 10),
+                  // [my新增] 内嵌浏览器登录: 真指纹过 bgm 反爬, 登录成功
+                  // 自动提取 cookie (含 httpOnly chii_auth) 入库
+                  if (Platform.isWindows)
+                    ElevatedButton(
+                      onPressed: () async {
+                        final ok = await Navigator.of(context).push<bool>(
+                          MaterialPageRoute(
+                              builder: (_) => const BgmLoginWebviewPage()),
+                        );
+                        if (ok == true) {
+                          setDialogState(() => _bgmCookieController.text =
+                              GStorage.getSetting(SettingsKeys.bgmWebCookie));
+                        }
+                      },
+                      child: const Text('浏览器登录自动取'),
+                    ),
                   // [my新增] 贴 ID 直连收藏: 已知 bgm ID 时跳过搜索,
                   // 认证详情 → 选类型 → 写入 bgm 账号 + 本地里番区
                   const Divider(height: 20),
